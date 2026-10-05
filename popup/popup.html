@@ -1,0 +1,51 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>XVidGrab</title>
+  <link rel="stylesheet" href="popup.css" />
+</head>
+<body>
+  <header class="head">
+    <img src="../icons/icon48.png" alt="" class="head-logo" />
+    <div class="head-text">
+      <h1>XVidGrab</h1>
+      <p id="status">Scanning the active tab…</p>
+    </div>
+    <span class="ver" id="version"></span>
+  </header>
+
+  <section class="videos" id="videos"></section>
+
+  <div class="actions" id="bulkRow" hidden>
+    <button id="downloadAll" class="btn primary">Download all</button>
+  </div>
+
+  <section class="settings">
+    <div class="row">
+      <label for="quality">Quality</label>
+      <select id="quality">
+        <option value="best">Best available</option>
+        <option value="smallest">Smallest file</option>
+      </select>
+    </div>
+    <div class="row">
+      <label for="showButtons">Show download buttons on x.com</label>
+      <input type="checkbox" id="showButtons" />
+    </div>
+  </section>
+
+  <section class="history">
+    <div class="sec-title">Recent downloads</div>
+    <ul id="history"></ul>
+  </section>
+
+  <footer class="foot">
+    <span>100% local &middot; no tracking</span>
+    <a href="https://github.com/abaduchanna/xvidgrab" target="_blank" rel="noreferrer">GitHub</a>
+    <span>MIT</span>
+  </footer>
+
+  <script src="popup.js"></script>
+</body>
+</html>
