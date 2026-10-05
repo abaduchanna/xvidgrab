@@ -41,26 +41,44 @@ released under the MIT license.
 
 ## Install (Firefox desktop)
 
-### Temporary (any Firefox, no signing)
+### Temporary (any Firefox, no signing — works right now)
 
-1. Download the latest `XVidGrab-<version>.zip` (or build it yourself, below).
+1. Download `XVidGrab-<version>.xpi` (or `.zip`) from the
+   [releases page](https://github.com/abaduchanna/xvidgrab/releases/latest).
 2. Open `about:debugging#/runtime/this-firefox`.
-3. Click **Load Temporary Add-on…** and pick `manifest.json` inside the zip
-   (unzip first).
+3. Click **Load Temporary Add-on…** and pick the `.xpi` file (or the
+   `manifest.json` inside the unzipped folder).
 4. Open [x.com](https://x.com) and scroll past any post with a video.
 
 Temporary add-ons are removed when Firefox closes.
 
-### Permanent
+### "This add-on could not be verified" — why, and the permanent fix
 
-Firefox requires extensions to be cryptographically signed (by
-[addons.mozilla.org](https://addons.mozilla.org)) before normal installation.
-Options:
+Normal ("release") Firefox only installs extensions that are
+cryptographically signed by Mozilla. Installing the unsigned build
+permanently fails with *"could not be verified"* — that is Firefox's
+signature enforcement, not a broken file. Three ways to make it
+permanent:
 
-- Self-distribute: sign the built zip as an **unlisted add-on** on AMO, or
-- Use **Firefox Developer Edition** / **Nightly** / **ESR** and set
-  `xpinstall.signatures.required` to `false` in `about:config`, then load the
-  zip via `about:addons` → gear icon → *Install Add-on From File…*.
+**Route A — sign it on AMO (recommended; keeps your current Firefox).**
+
+1. Create a free account at [addons.mozilla.org/developers](https://addons.mozilla.org/developers/).
+2. Either upload `XVidGrab-<version>.zip` yourself at
+   *Submit a New Add-on → on your own (self-distribution)* — AMO signs
+   it and gives you a permanent `.xpi` — **or** run the bundled signer:
+   - generate your API keys at
+     [addons.mozilla.org/developers/addon/api/key](https://addons.mozilla.org/developers/addon/api/key/)
+   - `./sign_amo.sh` (Linux/macOS) or `sign_amo.bat` (Windows; needs Node.js)
+3. Install the signed `.xpi` via `about:addons` → gear icon →
+   *Install Add-on From File…*. It then survives restarts and updates.
+
+**Route B — Developer Edition / Nightly / ESR.** In those channels set
+`xpinstall.signatures.required` to `false` in `about:config`, then
+install the unsigned file via `about:addons` → gear icon →
+*Install Add-on From File…*.
+
+**Route C — temporary load** (above) whenever you need it; it expires
+when Firefox closes.
 
 ## How it works
 
