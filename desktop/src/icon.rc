@@ -1,0 +1,35 @@
+/* resources — numeric IDs are mandatory (bare RC2135 otherwise)
+ * no #include: CI windres may not resolve headers, constants inline (T181 rule) */
+
+#undef VOS_NT_WINDOWS32
+#undef VFT_APP
+#define VOS_NT_WINDOWS32 0x00040004L
+#define VFT_APP          0x00000001L
+
+1 ICON "icon.ico"
+
+1 VERSIONINFO
+FILEVERSION     1,0,0,0
+PRODUCTVERSION  1,0,0,0
+FILEOS          VOS_NT_WINDOWS32
+FILETYPE        VFT_APP
+BEGIN
+  BLOCK "StringFileInfo"
+  BEGIN
+    BLOCK "040904B0"
+    BEGIN
+      VALUE "CompanyName",      "3S Verse"
+      VALUE "FileDescription",  "3SVerse VideoGrabber - free & open video/audio downloader"
+      VALUE "FileVersion",      "1.0.0.0"
+      VALUE "InternalName",     "VideoGrabber"
+      VALUE "LegalCopyright",   "MIT License - Copyright (c) 2026 Abad Umair Channa / 3S Verse"
+      VALUE "OriginalFilename", "VideoGrabber.exe"
+      VALUE "ProductName",      "3SVerse VideoGrabber"
+      VALUE "ProductVersion",   "1.0.0.0"
+    END
+  END
+  BLOCK "VarFileInfo"
+  BEGIN
+    VALUE "Translation", 0x0409, 0x04B0
+  END
+END

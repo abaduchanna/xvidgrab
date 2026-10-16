@@ -1,0 +1,104 @@
+name: Build 3SVerse VideoGrabber (Desktop)
+
+on:
+  push:
+    branches: [ main ]
+    tags: [ 'desktop-v*' ]
+    paths: [ 'desktop/**', '.github/workflows/desktop.yml' ]
+  workflow_dispatch:
+
+defaults:
+  run:
+    working-directory: desktop
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Inno Setup
+        run: choco install innosetup -y --no-progress
+
+      - name: Download yt-dlp engine (public domain)
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path dist | Out-Null
+          curl.exe -L -o dist\yt-dlp.exe https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp.exe
+          if ((Get-Item dist\yt-dlp.exe).Length -lt 5MB) { throw "yt-dlp.exe download too small" }
+
+      - name: Collect docs into dist
+        shell: pwsh
+        run: |
+          Copy-Item LICENSE dist\LICENSE.txt
+          Copy-Item yt-dlp-UNLICENSE.txt dist\yt-dlp-UNLICENSE.txt
+          Copy-Item README.md dist\README.md
+
+      - name: Compile resources
+        shell: pwsh
+        run: |
+          windres src\icon.rc -O coff -o src\icon_res.o
+          if ($LASTEXITCODE -ne 0) { throw "windres failed" }
+
+      - name: Compile VideoGrabber.exe
+        shell: pwsh
+        run: |
+          gcc src\main.c src\icon_res.o -o dist\VideoGrabber.exe `
+            -mwindows `
+            -lcomctl32 -lshell32 -lole32 -lshlwapi -lgdi32 -luser32 -lkernel32 -s
+          if ($LASTEXITCODE -ne 0) { throw "gcc failed" }
+          Get-Item dist\VideoGrabber.exe | Select-Object Name,Length
+
+      - name: Build installer
+        shell: pwsh
+        run: |
+          $iscc = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
+          & $iscc installer.iss
+          if ($LASTEXITCODE -ne 0) { throw "ISCC failed" }
+
+      - name: Build portable zip
+        shell: pwsh
+        run: |
+          Compress-Archive -Path dist\* -DestinationPath Output\3SVerse_VideoGrabber_Portable.zip -Force
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: videograber-build
+          path: |
+            dist/VideoGrabber.exe
+            dist/yt-dlp.exe
+            dist/LICENSE.txt
+            dist/yt-dlp-UNLICENSE.txt
+            dist/README.md
+            Output/*.exe
+            Output/*.zip
+
+  release:
+    if: startsWith(github.ref, 'refs/tags/desktop-v')
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: videograber-build
+          path: artifact
+
+      - name: Flatten artifact tree (upload-artifact@v4 preserves structure)
+        run: |
+          mkdir -p rel
+          find artifact -type f \( -name "*_Setup.exe" -o -name "*Portable.zip" \) -exec mv {} rel/ \;
+          ls -la rel/
+
+      - name: Create release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          TAG="${GITHUB_REF_NAME}"
+          gh release create "$TAG" rel/* --title "3SVerse VideoGrabber ${TAG}" --notes "Desktop app of the XVidGrab repo — free & open video/audio downloader (yt-dlp engine). MIT licensed. Install the Setup exe, or unzip the Portable package and run VideoGrabber.exe."
