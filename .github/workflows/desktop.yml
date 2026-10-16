@@ -48,7 +48,7 @@ jobs:
         run: |
           gcc src\main.c src\icon_res.o -o dist\VideoGrabber.exe `
             -mwindows `
-            -lcomctl32 -lshell32 -lole32 -lshlwapi -lgdi32 -luser32 -lkernel32 -s
+            -lcomctl32 -lshell32 -lole32 -lshlwapi -lgdi32 -luser32 -ladvapi32 -lkernel32 -s
           if ($LASTEXITCODE -ne 0) { throw "gcc failed" }
           Get-Item dist\VideoGrabber.exe | Select-Object Name,Length
 

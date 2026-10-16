@@ -1,17 +1,21 @@
 /*
- * XVidGrab — background page.
+ * XVidGrab — background (works as MV2 page in Firefox AND MV3 service
+ * worker in Chromium browsers: Chrome, Edge, Brave, Opera, Vivaldi...).
  *
  * Responsibilities:
  *  - capture X GraphQL auth headers (webRequest) so missed responses can be
  *    replayed by the page-world sniffer or fetched on demand
  *  - per-tab video badge
- *  - download relay (browser.downloads) + local history
+ *  - download relay (downloads API) + local history
  *  - popup <-> content script message relay
  *
  * Everything stays on-device: no network calls except re-fetching X's own
  * GraphQL endpoints with the user's already-present session.
  */
 "use strict";
+
+const API = globalThis.browser || globalThis.chrome;
+const BADGE_API = API.action || API.browserAction || API.action;
 
 const GRAPHQL_TTL = 10 * 60 * 1000;   /* 10 min */
 const GRAPHQL_MAX = 40;               /* per tab */
@@ -51,13 +55,13 @@ function captureHeaders(details) {
 }
 
 try {
-  browser.webRequest.onBeforeSendHeaders.addListener(captureHeaders, CAPTURE_FILTER, ["requestHeaders", "extraHeaders"]);
+  API.webRequest.onBeforeSendHeaders.addListener(captureHeaders, CAPTURE_FILTER, ["requestHeaders", "extraHeaders"]);
 } catch (e) {
-  /* older Firefox builds without extraHeaders support */
-  browser.webRequest.onBeforeSendHeaders.addListener(captureHeaders, CAPTURE_FILTER, ["requestHeaders"]);
+  /* older builds without extraHeaders support */
+  API.webRequest.onBeforeSendHeaders.addListener(captureHeaders, CAPTURE_FILTER, ["requestHeaders"]);
 }
 
-browser.webRequest.onCompleted.addListener((details) => {
+API.webRequest.onCompleted.addListener((details) => {
   if (details.tabId < 0 || details.type !== "xmlhttprequest" || !looksGraphql(details.url)) return;
   const h = headerMap.get(details.requestId) || {};
   headerMap.delete(details.requestId);
@@ -69,7 +73,7 @@ browser.webRequest.onCompleted.addListener((details) => {
   pruneTab(details.tabId);
 
   /* let the content script replay this URL through the page sniffer */
-  browser.tabs.sendMessage(details.tabId, {
+  API.tabs.sendMessage(details.tabId, {
     type: "xvg-replay-url",
     url: details.url,
     auth: h.auth || null,
@@ -77,26 +81,29 @@ browser.webRequest.onCompleted.addListener((details) => {
   }).catch(() => { /* no content script on that tab */ });
 }, CAPTURE_FILTER);
 
-browser.webRequest.onErrorOccurred.addListener((details) => {
+API.webRequest.onErrorOccurred.addListener((details) => {
   headerMap.delete(details.requestId);
 }, CAPTURE_FILTER);
 
 /* ------------------------------------------------------------------ */
 /* badge                                                               */
 /* ------------------------------------------------------------------ */
-try { browser.browserAction.setBadgeBackgroundColor({ color: "#1d9bf0" }); } catch (e) { /* ignore */ }
+try { BADGE_API.setBadgeBackgroundColor({ color: "#1d9bf0" }); } catch (e) { /* ignore */ }
 
 function setBadge(tabId, count) {
   const n = Number(count) || 0;
   const text = n > 0 ? (n > 99 ? "99+" : String(n)) : "";
-  browser.browserAction.setBadgeText({ tabId, text }).catch(() => { /* tab gone */ });
+  try {
+    const r = BADGE_API.setBadgeText({ tabId, text });
+    if (r && r.catch) r.catch(() => { /* tab gone */ });
+  } catch (e) { /* tab gone */ }
 }
 
-browser.tabs.onRemoved.addListener((tabId) => {
+API.tabs.onRemoved.addListener((tabId) => {
   tabCaptures.delete(tabId);
 });
 
-browser.tabs.onUpdated.addListener((tabId, info) => {
+API.tabs.onUpdated.addListener((tabId, info) => {
   if (info.status === "loading") setBadge(tabId, 0);
 });
 
@@ -105,7 +112,7 @@ browser.tabs.onUpdated.addListener((tabId, info) => {
 /* ------------------------------------------------------------------ */
 async function pushHistory(entry) {
   try {
-    const s = await browser.storage.local.get({ history: [] });
+    const s = await API.storage.local.get({ history: [] });
     const h = Array.isArray(s.history) ? s.history.slice() : [];
     h.unshift({
       filename: entry.filename || "",
@@ -114,7 +121,7 @@ async function pushHistory(entry) {
       downloadId: entry.downloadId || null,
       when: Date.now()
     });
-    await browser.storage.local.set({ history: h.slice(0, 50) });
+    await API.storage.local.set({ history: h.slice(0, 50) });
   } catch (e) { /* storage may be unavailable on first run */ }
 }
 
@@ -170,66 +177,63 @@ async function fetchTweetJson(tabId, tweetId) {
 }
 
 /* ------------------------------------------------------------------ */
-/* download progress (poll downloads.search, push to the source tab)   */
+/* download progress                                                   */
+/*                                                                   */
+/* MV3 service workers can kill setInterval timers, so progress is    */
+/* driven purely by downloads.onChanged (bytesReceived deltas), which */
+/* fires in BOTH MV2 pages and MV3 service workers.                   */
 /* ------------------------------------------------------------------ */
-const activePolls = new Map(); /* downloadId -> { tabId, timer, last } */
+const activePolls = new Map(); /* downloadId -> { tabId, startedAt, last } */
 
 function sendProgress(tabId, payload) {
   if (tabId == null) return;
-  browser.tabs.sendMessage(tabId, payload).catch(() => { /* tab gone */ });
+  try {
+    const r = API.tabs.sendMessage(tabId, payload);
+    if (r && r.catch) r.catch(() => { /* tab gone */ });
+  } catch (e) { /* tab gone */ }
 }
 
 function stopPoll(downloadId) {
-  const p = activePolls.get(downloadId);
-  if (!p) return;
-  clearInterval(p.timer);
   activePolls.delete(downloadId);
 }
 
 function startPoll(downloadId, tabId) {
   if (tabId == null) return;
-  const p = { tabId, timer: null, last: -1 };
-  p.timer = setInterval(async () => {
-    try {
-      const items = await browser.downloads.search({ id: downloadId });
-      const d = items && items[0];
-      if (!d) { stopPoll(downloadId); return; }
-      if (d.totalBytes > 0 && d.bytesReceived !== p.last) {
-        p.last = d.bytesReceived;
-        sendProgress(tabId, {
-          type: "xvg-progress",
-          downloadId,
-          state: "progress",
-          received: d.bytesReceived,
-          total: d.totalBytes
-        });
-      }
-      /* hard stop after 30 min */
-      if (Date.now() - p.startedAt > 30 * 60 * 1000) stopPoll(downloadId);
-    } catch (e) {
-      stopPoll(downloadId);
-    }
-  }, 500);
-  p.startedAt = Date.now();
-  activePolls.set(downloadId, p);
+  activePolls.set(downloadId, { tabId, startedAt: Date.now(), last: 0 });
 }
 
-browser.downloads.onChanged.addListener((delta) => {
+API.downloads.onChanged.addListener((delta) => {
   const p = activePolls.get(delta.id);
   if (!p) return;
   if (delta.state && delta.state.current === "complete") {
     sendProgress(p.tabId, { type: "xvg-progress", downloadId: delta.id, state: "done" });
     stopPoll(delta.id);
-  } else if (delta.state && delta.state.current === "interrupted") {
+    return;
+  }
+  if (delta.state && delta.state.current === "interrupted") {
     sendProgress(p.tabId, { type: "xvg-progress", downloadId: delta.id, state: "failed" });
     stopPoll(delta.id);
+    return;
   }
+  if (delta.bytesReceived && delta.bytesReceived.current !== p.last) {
+    p.last = delta.bytesReceived.current;
+    sendProgress(p.tabId, {
+      type: "xvg-progress",
+      downloadId: delta.id,
+      state: "progress",
+      received: p.last,
+      total: delta.totalBytes ? delta.totalBytes.current : 0
+    });
+  }
+  /* hard stop after 30 min */
+  if (Date.now() - p.startedAt > 30 * 60 * 1000) stopPoll(delta.id);
 });
 
 /* ------------------------------------------------------------------ */
-/* message router                                                      */
+/* message router (callback-style sendResponse: identical behaviour in */
+/* Firefox MV2 and Chromium MV3)                                       */
 /* ------------------------------------------------------------------ */
-browser.runtime.onMessage.addListener((msg, sender) => {
+API.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   if (!msg || typeof msg.type !== "string") return;
 
   switch (msg.type) {
@@ -240,7 +244,7 @@ browser.runtime.onMessage.addListener((msg, sender) => {
 
     case "xvg-download": {
       const tabId = sender.tab && sender.tab.id;
-      const p = browser.downloads.download({
+      API.downloads.download({
         url: msg.url,
         filename: msg.filename || undefined,
         conflictAction: "uniquify",
@@ -253,49 +257,54 @@ browser.runtime.onMessage.addListener((msg, sender) => {
           downloadId
         });
         startPoll(downloadId, tabId);
-        return { ok: true, downloadId };
+        sendResponse({ ok: true, downloadId });
       }).catch((err) => {
-        return { ok: false, error: String((err && err.message) || err) };
+        sendResponse({ ok: false, error: String((err && err.message) || err) });
       });
-      return p;
+      return true;
     }
 
     case "xvg-get-captured": {
       const tabId = sender.tab && sender.tab.id;
       const m = tabId != null ? tabCaptures.get(tabId) : null;
       const captures = m ? Array.from(m.values()).map((c) => ({ url: c.url, auth: c.auth, csrf: c.csrf })) : [];
-      return Promise.resolve({ captures });
+      sendResponse({ captures });
+      return;
     }
 
     case "xvg-fetch-tweet": {
       const tabId = sender.tab && sender.tab.id;
-      if (tabId == null || !msg.tweetId) return Promise.resolve({ ok: false, reason: "bad-request" });
-      return fetchTweetJson(tabId, msg.tweetId);
+      if (tabId == null || !msg.tweetId) { sendResponse({ ok: false, reason: "bad-request" }); return; }
+      fetchTweetJson(tabId, msg.tweetId).then(sendResponse);
+      return true;
     }
 
     case "xvg-get-videos": {
       /* popup -> active tab content script */
-      return browser.tabs.query({ active: true, lastFocusedWindow: true }).then((tabs) => {
+      API.tabs.query({ active: true, lastFocusedWindow: true }).then((tabs) => {
         const tab = tabs && tabs[0];
-        if (!tab || tab.id == null) return { videos: [], error: "No active tab." };
-        return browser.tabs.sendMessage(tab.id, { type: "xvg-get-videos" }).then(
-          (res) => res || { videos: [] },
-          () => ({ videos: [], error: "Open x.com and scroll a little first." })
+        if (!tab || tab.id == null) { sendResponse({ videos: [], error: "No active tab." }); return; }
+        API.tabs.sendMessage(tab.id, { type: "xvg-get-videos" }).then(
+          (res) => sendResponse(res || { videos: [] }),
+          () => sendResponse({ videos: [], error: "Open x.com and scroll a little first." })
         );
       });
+      return true;
     }
 
     case "xvg-show-download": {
-      if (!msg.downloadId) return Promise.resolve({ ok: false });
-      return browser.downloads.show(Number(msg.downloadId)).then(
-        () => ({ ok: true }),
-        () => ({ ok: false })
+      if (!msg.downloadId) { sendResponse({ ok: false }); return; }
+      API.downloads.show(Number(msg.downloadId)).then(
+        () => sendResponse({ ok: true }),
+        () => sendResponse({ ok: false })
       );
+      return true;
     }
 
     case "xvg-clear-history": {
-      return browser.storage.local.set({ history: [] }).then(() => ({ ok: true }));
+      API.storage.local.set({ history: [] }).then(() => sendResponse({ ok: true }));
+      return true;
     }
   }
-  /* async replies handled via returned promises above */
+  /* async replies handled via sendResponse + return true above */
 });

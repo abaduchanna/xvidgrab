@@ -1,0 +1,101 @@
+name: Build XVidGrab Extension (all browsers)
+
+on:
+  push:
+    branches: [ main ]
+    paths:
+      - "manifest.json"
+      - "manifest.firefox.json"
+      - "background.js"
+      - "content/**"
+      - "popup/**"
+      - "icons/**"
+      - ".github/workflows/ext.yml"
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  package:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Version consistency check
+        run: |
+          V1=$(python3 -c "import json;print(json.load(open('manifest.json'))['version'])")
+          V2=$(python3 -c "import json;print(json.load(open('manifest.firefox.json'))['version'])")
+          echo "chrome=$V1 firefox=$V2"
+          [ "$V1" = "$V2" ] || { echo "manifest versions differ"; exit 1; }
+          echo "EXT_VERSION=$V1" >> "$GITHUB_ENV"
+
+      - name: Validate JS syntax
+        run: |
+          node --check background.js
+          node --check content/main.js
+          node --check content/sniffer.js
+          node --check content/sniff-parse.js
+          node --check popup/popup.js
+
+      - name: Package Chromium (MV3) zip
+        run: |
+          mkdir -p dist stage_chrome stage_firefox
+          cp -r manifest.json background.js content popup icons stage_chrome/
+          ( cd stage_chrome && zip -q -r "$GITHUB_WORKSPACE/dist/XVidGrab_Extension_Chrome.zip" . )
+
+      - name: Package Firefox (MV2) xpi
+        run: |
+          cp -r background.js content popup icons stage_firefox/
+          cp manifest.firefox.json stage_firefox/manifest.json
+          ( cd stage_firefox && zip -q -r "$GITHUB_WORKSPACE/dist/XVidGrab_Extension_Firefox.xpi" . )
+
+      - name: Verify packages
+        run: |
+          cd dist
+          for f in XVidGrab_Extension_Chrome.zip XVidGrab_Extension_Firefox.xpi; do
+            unzip -l "$f" | grep -q "manifest.json" || { echo "$f missing manifest"; exit 1; }
+            unzip -l "$f" | grep -q "background.js" || { echo "$f missing background.js"; exit 1; }
+          done
+          # chrome zip must contain the MV3 manifest
+          unzip -p XVidGrab_Extension_Chrome.zip manifest.json | grep -q '"manifest_version": 3' || { echo "chrome zip is not MV3"; exit 1; }
+          # firefox xpi must contain the MV2 gecko manifest
+          unzip -p XVidGrab_Extension_Firefox.xpi manifest.json | grep -q '"manifest_version": 2' || { echo "firefox xpi is not MV2"; exit 1; }
+          echo "packages OK"
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: xvidgrab-extension
+          if-no-files-found: error
+          path: dist/*
+
+      - name: Publish release (tags only)
+        if: startsWith(github.ref, 'refs/tags/v')
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          mkdir -p rel
+          cp dist/XVidGrab_Extension_Chrome.zip dist/XVidGrab_Extension_Firefox.xpi rel/
+          if gh release view "$TAG" > /dev/null 2>&1; then
+            gh release upload "$TAG" rel/* --clobber
+          else
+            gh release create "$TAG" rel/* \
+              --title "XVidGrab v${EXT_VERSION} — browser extension" \
+              --notes "XVidGrab browser extension v${EXT_VERSION}
+
+          ## Downloads
+          - **Firefox**: \`XVidGrab_Extension_Firefox.xpi\` — install directly (drag into about:addons or install from file)
+          - **Chrome / Edge / Brave / Opera / Vivaldi / Yandex** (Chromium): \`XVidGrab_Extension_Chrome.zip\` — unzip the folder, then chrome://extensions (or edge://extensions etc.) > enable Developer mode > **Load unpacked** > select the unzipped folder
+
+          ## What it does
+          - One-click download buttons on every X (Twitter) post with video or GIF
+          - Quality selector, download history, live progress
+          - 100% local — no accounts, no tracking, no servers
+
+          MIT License — https://github.com/abaduchanna/xvidgrab"
+          fi

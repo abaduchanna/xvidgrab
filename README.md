@@ -2,19 +2,22 @@
 
 ![License](https://img.shields.io/badge/license-MIT-green)
 ![Firefox](https://img.shields.io/badge/Firefox-140%2B-1d9bf0)
-![Manifest](https://img.shields.io/badge/Manifest%20V2-webextension-blue)
+![Chromium](https://img.shields.io/badge/Chrome%20%2F%20Edge%20%2F%20Brave-111%2B-4285f4)
+![Manifest](https://img.shields.io/badge/Manifest-V2%20%2B%20V3-blue)
 ![Tracking](https://img.shields.io/badge/tracking-none-success)
 
-**XVidGrab** is a free, open-source Firefox extension that downloads videos and
-animated GIFs from X (formerly Twitter) with one click. Browse x.com as usual —
-XVidGrab passively detects video streams as they load and lets you save them
-from the post itself or from a popup list with quality selection.
+**XVidGrab** is a free, open-source **cross-browser extension** that downloads
+videos and animated GIFs from X (formerly Twitter) with one click. It runs in
+**every major browser**: Firefox, Chrome, Edge, Brave, Opera, Vivaldi and
+Yandex. Browse x.com as usual — XVidGrab passively detects video streams as
+they load and lets you save them from the post itself or from a popup list
+with quality selection.
 
 This repo hosts **two products**:
 
 | Product | What it is | Where |
 |---|---|---|
-| **XVidGrab** | Firefox extension — one-click video/GIF download on x.com | repo root (this README) |
+| **XVidGrab** | Cross-browser extension (Firefox + all Chromium browsers) — one-click video/GIF download on x.com | repo root (this README) |
 | **3SVerse VideoGrabber** | Windows desktop app — paste URL, download video/audio from YouTube, Facebook, X, TikTok and hundreds more sites via the yt-dlp engine | [`desktop/`](desktop/README.md) |
 
 It is a clean-room, fully local alternative to freemium downloaders such as
@@ -46,11 +49,33 @@ released under the MIT license.
 - **No limits, no nagging, no servers** — every byte flows directly from X's
   CDN to your Downloads folder.
 
-## Install (Firefox desktop)
+## Install — Chrome / Edge / Brave / Opera / Vivaldi / Yandex (Chromium)
+
+Since v1.1.0 the extension ships as Manifest V3 for every Chromium-based
+browser. One package works in all of them:
+
+1. Download `XVidGrab_Extension_Chrome.zip` from the
+   [releases page](https://github.com/abaduchanna/xvidgrab/releases/latest)
+   and unzip it into a folder you keep (e.g. `C:\XVidGrab`).
+2. Open the extensions page:
+   `chrome://extensions` (Chrome), `edge://extensions` (Edge),
+   `brave://extensions` (Brave), `opera://extensions` (Opera),
+   `vivaldi://extensions` (Vivaldi), `browser://tune` → extensions (Yandex).
+3. Enable **Developer mode** (toggle, usually top-right).
+4. Click **Load unpacked** and select the unzipped folder.
+5. Pin the XVidGrab icon, open [x.com](https://x.com) and scroll past any
+   post with a video — download buttons appear in the post action rows.
+
+The extension stays installed until you remove it or delete the folder.
+(Chromium blocks one-click installs of non-store extensions — that is a
+browser security policy, not a bug in XVidGrab. "Load unpacked" is the
+documented, supported route.)
+
+## Install — Firefox
 
 ### Temporary (any Firefox, no signing — works right now)
 
-1. Download `XVidGrab-<version>.xpi` (or `.zip`) from the
+1. Download `XVidGrab_Extension_Firefox.xpi` from the
    [releases page](https://github.com/abaduchanna/xvidgrab/releases/latest).
 2. Open `about:debugging#/runtime/this-firefox`.
 3. Click **Load Temporary Add-on…** and pick the `.xpi` file (or the
@@ -96,7 +121,10 @@ or audio-only M4A/MP3), press **Download**. Live progress bar, full engine log,
 cancel button, save-to folder picker. No administrator rights, no accounts, no
 telemetry.
 
-- **Download:** [desktop-v1.0.0 release](https://github.com/abaduchanna/xvidgrab/releases?q=desktop-v&expanded=true)
+- **v1.1.0 UI refresh:** full 3SVerse branding — spiral + orb logo header,
+  dark & light themes with a one-click toggle (persisted), custom-styled
+  controls, themed progress bar, dark title bar in dark mode.
+- **Download:** [desktop-v1.1.0 release](https://github.com/abaduchanna/xvidgrab/releases?q=desktop-v&expanded=true)
   — per-user `Setup.exe` or portable ZIP.
 - **Details & build instructions:** [`desktop/README.md`](desktop/README.md).
 - The app source is MIT licensed; the bundled yt-dlp engine is public domain
@@ -113,10 +141,17 @@ x.com page
 ├── content/main.js      (isolated sandbox)
 │     stores records · injects action-row buttons · progress panel
 │     → downloads via background relay
-└── background.js
+└── background.js  (MV2 page in Firefox / MV3 service worker in Chromium)
       webRequest captures GraphQL auth headers (recovery/replay)
-      browser.downloads.download + progress polling + history
+      downloads.download + onChanged-driven progress + history
 ```
+
+The same codebase ships two manifests: `manifest.json` (Manifest V3,
+service worker — Chromium) and `manifest.firefox.json` (Manifest V2,
+persistent background — Firefox). CI packages both on every `v*` tag.
+Download progress is driven purely by `downloads.onChanged` deltas, so it
+behaves identically in MV2 pages and MV3 service workers (which may kill
+timers, but never extension events).
 
 Media extraction walks X's GraphQL responses (`TweetDetail`,
 `TweetResultByRestId`, timeline and profile responses — current and legacy
@@ -142,6 +177,9 @@ HLS master playlists are listed for information but not downloaded.
 - Very old tweets never re-fetched after installation may need a manual page
   reload (or one extra scroll) before the stream metadata appears.
 - Firefox for Android is not supported (buttons rely on desktop UI hooks).
+- In Chromium browsers, Chromium's own store policy means the extension is
+  loaded via "Load unpacked" (see install steps above) rather than a
+  one-click web-store install.
 
 ## Build from source
 

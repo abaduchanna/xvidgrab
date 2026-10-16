@@ -3,13 +3,15 @@
  *
  *  - keeps a per-tab store of media records published by the page sniffer
  *  - injects a native-feeling download button into tweet action rows
- *  - downloads via browser.downloads (background relay) with live progress
+ *  - downloads via the downloads API (background relay) with live progress
  *  - replays GraphQL URLs the background captured while we were not yet
  *    injected (late install / reload / bfcache)
  *  - answers popup queries for the active tab's video list
  */
 (function () {
   "use strict";
+
+  const api = globalThis.browser || globalThis.chrome;
 
   /* ---------------------------------------------------------------- */
   /* state                                                            */
@@ -62,7 +64,7 @@
 
   function updateBadge() {
     try {
-      browser.runtime.sendMessage({ type: "xvg-badge", count: store.size }).catch(() => {});
+      api.runtime.sendMessage({ type: "xvg-badge", count: store.size }).catch(() => {});
     } catch (e) { /* extension reloading */ }
   }
 
@@ -70,13 +72,13 @@
   /* settings                                                         */
   /* ---------------------------------------------------------------- */
   const DEFAULTS = { quality: "best", showButtons: true };
-  browser.storage.local.get(DEFAULTS).then((s) => {
+  api.storage.local.get(DEFAULTS).then((s) => {
     settings.quality = s.quality === "smallest" ? "smallest" : "best";
     settings.showButtons = s.showButtons !== false;
     applySettings();
   }).catch(() => {});
 
-  browser.storage.onChanged.addListener((changes, area) => {
+  api.storage.onChanged.addListener((changes, area) => {
     if (area !== "local") return;
     if (changes.quality) settings.quality = changes.quality.newValue === "smallest" ? "smallest" : "best";
     if (changes.showButtons) settings.showButtons = changes.showButtons.newValue !== false;
@@ -241,7 +243,7 @@
   }
 
   async function resolveTweet(tweetId) {
-    const res = await browser.runtime.sendMessage({
+    const res = await api.runtime.sendMessage({
       type: "xvg-fetch-tweet",
       tweetId
     }).catch(() => ({ ok: false }));
@@ -378,7 +380,7 @@
       pulse(btn);
     }
     try {
-      const res = await browser.runtime.sendMessage({
+      const res = await api.runtime.sendMessage({
         type: "xvg-download",
         url: src.url,
         filename,
@@ -450,7 +452,7 @@
     return videos;
   }
 
-  browser.runtime.onMessage.addListener((msg) => {
+  api.runtime.onMessage.addListener((msg) => {
     if (!msg || typeof msg.type !== "string") return;
 
     switch (msg.type) {
@@ -480,7 +482,7 @@
   /* replay URLs the background captured before this content script ran */
   (async () => {
     try {
-      const res = await browser.runtime.sendMessage({ type: "xvg-get-captured" })
+      const res = await api.runtime.sendMessage({ type: "xvg-get-captured" })
         .catch(() => ({ captures: [] }));
       (res && res.captures || []).slice(0, 12).forEach(dispatchReplay);
     } catch (e) { /* ignore */ }

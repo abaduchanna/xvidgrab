@@ -1,0 +1,61 @@
+{
+  "manifest_version": 2,
+  "name": "XVidGrab — X (Twitter) Video Downloader",
+  "version": "1.1.0",
+  "description": "One-click video & GIF downloader for X (Twitter). Free and open source, 100% local — no accounts, no limits, no tracking.",
+  "author": "3SVerse",
+  "homepage_url": "https://github.com/abaduchanna/xvidgrab",
+  "icons": {
+    "16": "icons/icon16.png",
+    "32": "icons/icon32.png",
+    "48": "icons/icon48.png",
+    "64": "icons/icon64.png",
+    "128": "icons/icon128.png"
+  },
+  "permissions": [
+    "storage",
+    "downloads",
+    "webRequest",
+    "*://x.com/*",
+    "*://twitter.com/*",
+    "*://*.twimg.com/*",
+    "*://cdn.syndication.twimg.com/*"
+  ],
+  "background": {
+    "scripts": ["background.js"],
+    "persistent": true
+  },
+  "content_scripts": [
+    {
+      "matches": ["https://x.com/*", "https://twitter.com/*"],
+      "js": ["content/sniff-parse.js", "content/sniffer.js"],
+      "run_at": "document_start",
+      "world": "MAIN"
+    },
+    {
+      "matches": ["https://x.com/*", "https://twitter.com/*"],
+      "js": ["content/sniff-parse.js", "content/main.js"],
+      "run_at": "document_idle"
+    }
+  ],
+  "browser_action": {
+    "default_title": "XVidGrab",
+    "default_popup": "popup/popup.html",
+    "default_icon": {
+      "16": "icons/icon16.png",
+      "32": "icons/icon32.png",
+      "48": "icons/icon48.png",
+      "64": "icons/icon64.png",
+      "128": "icons/icon128.png"
+    }
+  },
+  "browser_specific_settings": {
+    "gecko": {
+      "id": "xvidgrab@3sverse.com",
+      "strict_min_version": "140.0",
+      "data_collection_permissions": {
+        "required": ["none"]
+      }
+    }
+  }
+}

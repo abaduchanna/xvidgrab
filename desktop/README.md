@@ -1,6 +1,6 @@
 # 3SVerse VideoGrabber (Desktop)
 
-> Windows desktop app of the [XVidGrab](../README.md) repo — the Firefox
+> Windows desktop app of the [XVidGrab](../README.md) repo — the cross-browser
 > extension for X (Twitter) lives at the repository root.
 
 Free and open-source video/audio downloader for Windows 10/11. Paste a URL, pick a
@@ -12,11 +12,23 @@ engine it drives is **yt-dlp** ([github.com/yt-dlp/yt-dlp](https://github.com/yt
 which is public-domain software (The Unlicense). Nothing in this project reuses or
 rebrands anyone else's proprietary installer.
 
+## What's new in v1.1.0 — 3SVerse rebrand
+
+- **Full 3SVerse branding**: header with the gradient **spiral** logo, glowing
+  **orb** core, 3SVERSE wordmark and brand gradient bar (cyan → violet).
+- **Dark & light themes** with a one-click **Light mode / Dark mode** toggle
+  button in the header — the choice is persisted per user and applied on start
+  (including a dark native title bar on Windows 10/11 in dark mode).
+- **Custom skin** for every control: rounded owner-drawn buttons with hover
+  states, themed URL/format/folder fields, dark log console, and a custom
+  rounded progress bar with a percent overlay.
+- New 3SVerse app icon (spiral + orb on a dark tile).
+
 ## Features
 
 - Paste any video or audio page URL supported by yt-dlp (YouTube, Facebook, X/Twitter,
   Instagram, TikTok, Reddit, and hundreds more — whatever your yt-dlp build supports).
-- Four formats in v1.0.0:
+- Four formats:
   - **Best MP4 (recommended)** — pre-merged MP4, works without ffmpeg
   - **Best quality (any format)** — highest available streams; merging separate
     video+audio streams needs `ffmpeg.exe` placed next to `VideoGrabber.exe`
@@ -27,11 +39,12 @@ rebrands anyone else's proprietary installer.
 - Live progress bar parsed from yt-dlp's real `[download] 42.3%` lines, plus a
   complete engine log so failures always show the exact reason.
 - Cancel button kills the running engine immediately.
+- Dark / light theme toggle (persisted), 3SVerse-branded UI.
 
 ## Install
 
 ### Setup (recommended)
-1. Download `3SVerse_VideoGrabber_v1.0.0_Setup.exe` from
+1. Download `3SVerse_VideoGrabber_v1.1.0_Setup.exe` from
    [desktop releases](https://github.com/abaduchanna/xvidgrab/releases?q=desktop-v&expanded=true).
 2. Run it — no administrator rights needed (installs into
    `%LOCALAPPDATA%\3SVerse\VideoGrabber`).
@@ -70,7 +83,7 @@ of the content you save. Download only what you have the right to keep.
 ```
 windres src/icon.rc -O coff -o src/icon_res.o
 gcc src/main.c src/icon_res.o -o VideoGrabber.exe -mwindows \
-    -lcomctl32 -lshell32 -lole32 -lshlwapi -lgdi32 -luser32 -lkernel32 -s
+    -lcomctl32 -lshell32 -lole32 -lshlwapi -lgdi32 -luser32 -ladvapi32 -lkernel32 -s
 ```
 
 CI (`.github/workflows/desktop.yml`, repo root) builds the exe + bundles the
