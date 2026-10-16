@@ -13,13 +13,6 @@ Yandex. Browse x.com as usual — XVidGrab passively detects video streams as
 they load and lets you save them from the post itself or from a popup list
 with quality selection.
 
-This repo hosts **two products**:
-
-| Product | What it is | Where |
-|---|---|---|
-| **XVidGrab** | Cross-browser extension (Firefox + all Chromium browsers) — one-click video/GIF download on x.com | repo root (this README) |
-| **3SVerse VideoGrabber** | Windows desktop app — paste URL, download video/audio from YouTube, Facebook, X, TikTok and hundreds more sites via the yt-dlp engine | [`desktop/`](desktop/README.md) |
-
 It is a clean-room, fully local alternative to freemium downloaders such as
 *App Pass's "X (Twitter) Video Downloader"*: the same core workflow
 (page-level stream detection + post button + popup list), but **without
@@ -111,24 +104,6 @@ install the unsigned file via `about:addons` → gear icon →
 
 **Route C — temporary load** (above) whenever you need it; it expires
 when Firefox closes.
-
-## Desktop app (Windows) — 3SVerse VideoGrabber
-
-A separate, standalone downloader for Windows 10/11 that covers **every site the
-yt-dlp engine supports** — YouTube, Facebook, X/Twitter, Instagram, TikTok,
-Reddit and hundreds more. Paste a URL, pick a format (best MP4, best quality,
-or audio-only M4A/MP3), press **Download**. Live progress bar, full engine log,
-cancel button, save-to folder picker. No administrator rights, no accounts, no
-telemetry.
-
-- **v1.1.0 UI refresh:** full 3SVerse branding — spiral + orb logo header,
-  dark & light themes with a one-click toggle (persisted), custom-styled
-  controls, themed progress bar, dark title bar in dark mode.
-- **Download:** [desktop-v1.1.0 release](https://github.com/abaduchanna/xvidgrab/releases?q=desktop-v&expanded=true)
-  — per-user `Setup.exe` or portable ZIP.
-- **Details & build instructions:** [`desktop/README.md`](desktop/README.md).
-- The app source is MIT licensed; the bundled yt-dlp engine is public domain
-  (The Unlicense).
 
 ## How it works
 
