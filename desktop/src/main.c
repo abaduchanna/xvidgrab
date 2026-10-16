@@ -1,15 +1,19 @@
-/* 3SVerse VideoGrabber v1.1.0 — free & open video/audio downloader GUI (yt-dlp engine)
+/* 3SVerse VideoGrabber v1.2.0 — free & open video/audio downloader GUI (yt-dlp engine)
  * MIT License — Copyright (c) 2026 Abad Umair Channa / 3S Verse
  * Engine: yt-dlp (https://github.com/yt-dlp/yt-dlp) — public domain (The Unlicense)
  *
- * v1.1.0 — full 3SVerse rebrand:
- *   - custom GDI skin with dark & light themes (one-click toggle, persisted
- *     in HKCU\Software\3SVerse\VideoGrabber)
- *   - header drawn with the 3SVerse brand: gradient spiral logo, glowing orb,
- *     wordmark + accent gradient bar
- *   - dark title bar (DWM immersive dark mode) + rounded corners on Win11
- *   - owner-drawn buttons with hover states, themed edit/combo/log controls
- *   - custom rounded progress bar with percent overlay
+ * v1.2.0 — "3SVerse Halo" full visual overhaul (fixes v1.1.0 blank-button bug):
+ *   - root cause of v1.1.0 blank buttons: BS_OWNERDRAW + WM_DRAWITEM plumbing
+ *     failed to render on real machines -> buttons rendered as blank boxes.
+ *     v1.2.0 removes that entire dependency: all buttons are a custom
+ *     self-painting window class ("3SVBtn") that cannot blank out.
+ *   - labels are painted directly by the parent (no STATIC child controls)
+ *   - animated 3SVerse brand header: rotating gradient spiral + pulsing orb
+ *   - gradient Download button (cyan -> violet), ghost-style secondary buttons
+ *   - focus-accented rounded frames around edits / combo / log
+ *   - faint rotating spiral watermark on the canvas, gradient progress bar
+ *   - dark & light themes, both fully branded; theme persisted in
+ *     HKCU\Software\3SVerse\VideoGrabber; DWM dark title bar + caption color
  */
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
@@ -25,8 +29,9 @@
 #pragma comment(lib, "shell32.lib")
 #pragma comment(lib, "ole32.lib")
 
-#define APP_TITLEW  L"3SVerse VideoGrabber v1.1.0"
+#define APP_TITLEW  L"3SVerse VideoGrabber v1.2.0"
 #define APP_CLASSW  L"3SVerseVideoGrabber"
+#define BTN_CLASSW  L"3SVBtn"
 #define WM_APP_DONE (WM_APP + 1)
 
 #define IDC_URL      101
@@ -39,9 +44,14 @@
 #define IDC_LOG      108
 #define IDC_THEME    110
 
-#define CLIENT_W  680
-#define CLIENT_H  556
-#define HEADER_H  92
+/* button styles for the 3SVBtn class */
+#define BSTYLE_PRIMARY 0   /* gradient fill, white bold text (Download) */
+#define BSTYLE_GHOST   1   /* panel fill + border (Cancel / Browse / Open) */
+#define BSTYLE_TOGGLE  2   /* ghost + top-right theme switch */
+
+#define CLIENT_W  700
+#define CLIENT_H  612
+#define HEADER_H  108
 
 static const char *g_fmtArgs[] = {
     " -f \"bv*[ext=mp4]+ba[ext=m4a]/b[ext=mp4]/b\"",   /* 0: best MP4 */
@@ -67,48 +77,48 @@ static BOOL    g_dark = TRUE;
 
 static void SetDarkPalette(PALETTE *p)
 {
-    p->bg         = RGB(23, 25, 31);
-    p->headerBg   = RGB(28, 30, 38);
-    p->txt        = RGB(232, 235, 242);
-    p->txtDim     = RGB(150, 156, 170);
-    p->txtMute    = RGB(104, 110, 124);
-    p->editBg     = RGB(17, 19, 24);
+    p->bg         = RGB(21, 23, 29);
+    p->headerBg   = RGB(27, 30, 38);
+    p->txt        = RGB(234, 237, 244);
+    p->txtDim     = RGB(148, 155, 170);
+    p->txtMute    = RGB(102, 108, 122);
+    p->editBg     = RGB(16, 18, 23);
     p->editTxt    = RGB(235, 238, 245);
-    p->editBorder = RGB(55, 60, 72);
-    p->btnFace    = RGB(38, 42, 51);
-    p->btnHi      = RGB(48, 53, 64);
+    p->editBorder = RGB(58, 63, 76);
+    p->btnFace    = RGB(38, 42, 52);
+    p->btnHi      = RGB(50, 55, 67);
     p->btnDn      = RGB(28, 32, 40);
-    p->btnTxt     = RGB(225, 229, 238);
+    p->btnTxt     = RGB(226, 230, 239);
     p->accent     = RGB(0, 176, 240);    /* 3SVerse cyan-blue */
     p->accent2    = RGB(124, 58, 237);   /* 3SVerse violet */
     p->primTxt    = RGB(255, 255, 255);
     p->progTrack  = RGB(30, 33, 41);
     p->progFill   = RGB(0, 160, 225);
-    p->logBg      = RGB(16, 18, 23);
-    p->logTxt     = RGB(190, 196, 208);
+    p->logBg      = RGB(14, 16, 21);
+    p->logTxt     = RGB(188, 194, 206);
 }
 
 static void SetLightPalette(PALETTE *p)
 {
-    p->bg         = RGB(243, 245, 248);
+    p->bg         = RGB(238, 241, 246);
     p->headerBg   = RGB(255, 255, 255);
-    p->txt        = RGB(28, 32, 40);
-    p->txtDim     = RGB(95, 102, 116);
+    p->txt        = RGB(29, 34, 44);
+    p->txtDim     = RGB(90, 98, 112);
     p->txtMute    = RGB(140, 147, 160);
     p->editBg     = RGB(255, 255, 255);
-    p->editTxt    = RGB(28, 32, 40);
-    p->editBorder = RGB(205, 210, 220);
-    p->btnFace    = RGB(238, 241, 246);
-    p->btnHi      = RGB(248, 250, 253);
-    p->btnDn      = RGB(225, 229, 236);
-    p->btnTxt     = RGB(40, 44, 54);
-    p->accent     = RGB(0, 150, 214);
-    p->accent2    = RGB(110, 52, 215);
+    p->editTxt    = RGB(29, 34, 44);
+    p->editBorder = RGB(201, 207, 218);
+    p->btnFace    = RGB(232, 236, 243);
+    p->btnHi      = RGB(244, 247, 251);
+    p->btnDn      = RGB(221, 227, 236);
+    p->btnTxt     = RGB(40, 46, 58);
+    p->accent     = RGB(0, 144, 216);
+    p->accent2    = RGB(109, 52, 216);
     p->primTxt    = RGB(255, 255, 255);
     p->progTrack  = RGB(226, 230, 238);
-    p->progFill   = RGB(0, 140, 200);
-    p->logBg      = RGB(252, 253, 255);
-    p->logTxt     = RGB(60, 66, 78);
+    p->progFill   = RGB(0, 134, 204);
+    p->logBg      = RGB(255, 255, 255);
+    p->logTxt     = RGB(74, 81, 96);
 }
 
 static void ApplyPalette(void)
@@ -121,9 +131,12 @@ static void ApplyPalette(void)
 /* ------------------------------------------------------------------ */
 static HWND g_hUrl, g_hFmt, g_hDir, g_hLog, g_hGo, g_hCancel, g_hOpen,
             g_hBrowse, g_hTheme, g_hMain;
-static HFONT g_hFont, g_hMono, g_hFontSm, g_hFontBrand;
+static HFONT g_hFont, g_hMono, g_hFontSm, g_hFontBtn, g_hFontWord, g_hFontSub;
 static HBRUSH g_brBg, g_brEdit, g_brLog;
-static RECT g_rcProg;
+static WNDPROC g_oldUrl, g_oldDir, g_oldFmt;
+static RECT g_rcHeader, g_rcProg, g_rcLog, g_rcUrlF, g_rcFmtF, g_rcDirF;
+static int  g_fmtFieldH = 30;
+static double g_phase = 0.0;
 
 /* job state */
 static PROCESS_INFORMATION g_pi;
@@ -137,55 +150,6 @@ static size_t g_pendingLen = 0, g_pendingCap = 0;
 static WCHAR *g_shown = NULL;
 static size_t g_shownLen = 0, g_shownCap = 0;
 static int    g_percent = -1;     /* -1 = unknown */
-
-/* ------------------------------------------------------------------ */
-/* hover-tracked owner-draw buttons (classic SetWindowLongPtr — no     */
-/* comctl32 v6 dependency)                                             */
-/* ------------------------------------------------------------------ */
-typedef struct { WNDPROC old; HWND hwnd; int hover; } BTNCTX;
-static BTNCTX g_ctx[8];
-static int    g_ctxN = 0;
-
-static LRESULT CALLBACK HoverBtnProc(HWND h, UINT m, WPARAM w, LPARAM l)
-{
-    BTNCTX *c = (BTNCTX *)GetWindowLongPtrW(h, GWLP_USERDATA);
-    if (c) {
-        if (m == WM_MOUSEMOVE && !c->hover) {
-            TRACKMOUSEEVENT t;
-            c->hover = 1;
-            ZeroMemory(&t, sizeof(t));
-            t.cbSize = sizeof(t);
-            t.dwFlags = TME_LEAVE;
-            t.hwndTrack = h;
-            TrackMouseEvent(&t);
-            InvalidateRect(h, NULL, TRUE);
-        } else if (m == WM_MOUSELEAVE) {
-            c->hover = 0;
-            InvalidateRect(h, NULL, TRUE);
-        }
-    }
-    return CallWindowProcW(c ? c->old : DefWindowProcW, h, m, w, l);
-}
-
-static void TrackHover(HWND h)
-{
-    BTNCTX *c;
-    if (g_ctxN >= 8) return;
-    c = &g_ctx[g_ctxN++];
-    c->hover = 0;
-    c->hwnd = h;
-    c->old = (WNDPROC)GetWindowLongPtrW(h, GWLP_WNDPROC);
-    SetWindowLongPtrW(h, GWLP_USERDATA, (LONG_PTR)c);
-    SetWindowLongPtrW(h, GWLP_WNDPROC, (LONG_PTR)HoverBtnProc);
-}
-
-static int IsHover(HWND h)
-{
-    int i;
-    for (i = 0; i < g_ctxN; i++)
-        if (g_ctx[i].hwnd == h) return g_ctx[i].hover;
-    return 0;
-}
 
 /* ------------------------------------------------------------------ */
 /* small drawing helpers                                               */
@@ -241,23 +205,56 @@ static void FillRound(HDC dc, RECT r, int rad, COLORREF fill, COLORREF outline)
     DeleteObject(p);
 }
 
-/* 3SVerse brand mark: archimedean spiral stroked with the brand gradient */
-static void DrawSpiral(HDC dc, int cx, int cy, double scale, COLORREF c1, COLORREF c2)
+/* horizontal gradient strip via lerped bands (pure GDI, no msimg32) */
+static void FillHGrad(HDC dc, RECT r, COLORREF c1, COLORREF c2, int bands)
 {
-    const int SEG = 12, PTS = 12;
+    int i;
+    int w = r.right - r.left;
+    if (w <= 0 || bands < 1) return;
+    for (i = 0; i < bands; i++) {
+        RECT s = r;
+        s.left  = r.left + (int)((long long)w * i / bands);
+        s.right = r.left + (int)((long long)w * (i + 1) / bands);
+        if (s.right <= s.left) s.right = s.left + 1;
+        FillSolid(dc, s, Lerp(c1, c2, (double)(i + 0.5) / bands));
+    }
+}
+
+/* vertical gradient via lerped bands */
+static void FillVGrad(HDC dc, RECT r, COLORREF c1, COLORREF c2, int bands)
+{
+    int i;
+    int h = r.bottom - r.top;
+    if (h <= 0 || bands < 1) return;
+    for (i = 0; i < bands; i++) {
+        RECT s = r;
+        s.top    = r.top + (int)((long long)h * i / bands);
+        s.bottom = r.top + (int)((long long)h * (i + 1) / bands);
+        if (s.bottom <= s.top) s.bottom = s.top + 1;
+        FillSolid(dc, s, Lerp(c1, c2, (double)(i + 0.5) / bands));
+    }
+}
+
+/* 3SVerse brand mark: archimedean spiral stroked with the brand gradient.
+ * phase rotates the whole spiral so the logo slowly spins. */
+static void DrawSpiral(HDC dc, int cx, int cy, double scale, double phase,
+                       COLORREF c1, COLORREF c2)
+{
+    const int SEG = 12, PTS = 14;
     const double TWO_PI = 6.28318530717958647692;
     int s, i;
     for (s = 0; s < SEG; s++) {
-        POINT pts[13];
+        POINT pts[15];
         HPEN p, op;
         p = CreatePen(PS_SOLID, 2, Lerp(c1, c2, ((double)s + 0.5) / SEG));
         op = SelectObject(dc, p);
         for (i = 0; i <= PTS; i++) {
             int k = s * PTS + i;
-            double t = k * (2.5 * TWO_PI) / (SEG * PTS);
+            double t = k * (2.6 * TWO_PI) / (SEG * PTS);
+            double a = t - phase;
             double r = 1.55 * t * scale;
-            pts[i].x = (int)(cx + r * cos(t));
-            pts[i].y = (int)(cy - r * sin(t));
+            pts[i].x = (int)(cx + r * cos(a));
+            pts[i].y = (int)(cy - r * sin(a));
         }
         MoveToEx(dc, pts[0].x, pts[0].y, NULL);
         for (i = 1; i <= PTS; i++) LineTo(dc, pts[i].x, pts[i].y);
@@ -282,6 +279,24 @@ static void DrawOrb(HDC dc, int cx, int cy, int R, COLORREF core, COLORREF edge,
         else          c = Lerp(core, edge, f / 0.62);
         b = CreateSolidBrush(c);
         ob = SelectObject(dc, b);
+        Ellipse(dc, cx - r, cy - r, cx + r, cy + r);
+        SelectObject(dc, ob);
+        DeleteObject(b);
+    }
+    SelectObject(dc, op);
+}
+
+/* soft glow rings (fake alpha via lerped solid discs) */
+static void DrawGlow(HDC dc, int cx, int cy, int R, COLORREF glow, COLORREF bgc)
+{
+    int i;
+    HPEN np = (HPEN)GetStockObject(NULL_PEN);
+    HGDIOBJ op = SelectObject(dc, np);
+    for (i = 6; i >= 1; i--) {
+        int r = R * i / 6;
+        COLORREF c = Lerp(glow, bgc, 0.82);
+        HBRUSH b = CreateSolidBrush(c);
+        HGDIOBJ ob = SelectObject(dc, b);
         Ellipse(dc, cx - r, cy - r, cx + r, cy + r);
         SelectObject(dc, ob);
         DeleteObject(b);
@@ -327,12 +342,15 @@ static void ApplyDwm(HWND w)
     FN_DwmSetAttr f;
     BOOL dark = g_dark;
     DWORD pref = 2; /* rounded corners */
+    COLORREF cap;
     if (!m || !w) return;
     f = (FN_DwmSetAttr)(void *)GetProcAddress(m, "DwmSetWindowAttribute");
     if (!f) return;
     f(w, 20, &dark, sizeof(dark));   /* DWMWA_USE_IMMERSIVE_DARK_MODE */
     f(w, 19, &dark, sizeof(dark));   /* older builds */
     f(w, 33, &pref, sizeof(pref));   /* DWMWA_WINDOW_CORNER_PREFERENCE */
+    cap = g_pal.headerBg;            /* Win11: caption matches the header */
+    f(w, 35, &cap, sizeof(cap));
 }
 
 static void RebuildBrushes(void)
@@ -651,62 +669,273 @@ static void OpenFolder(void)
 }
 
 /* ------------------------------------------------------------------ */
+/* 3SVBtn — custom self-painting button class.                         */
+/* No BS_OWNERDRAW / WM_DRAWITEM dependency: the button paints itself, */
+/* so it can never render as a blank box (v1.1.0 regression root fix). */
+/* ------------------------------------------------------------------ */
+typedef struct {
+    int  style;        /* BSTYLE_PRIMARY / BSTYLE_GHOST / BSTYLE_TOGGLE */
+    BOOL hover;
+    BOOL down;
+    HFONT font;
+} BTNSTATE;
+
+static void BtnPaint(HWND h, BTNSTATE *st)
+{
+    PAINTSTRUCT ps;
+    RECT r, rt;
+    HDC dc;
+    WCHAR t[64];
+    COLORREF fill, txtc, out;
+    int id = GetDlgCtrlID(h);
+    int bands = 20;
+
+    dc = BeginPaint(h, &ps);
+    GetClientRect(h, &r);
+    rt = r;
+
+    GetWindowTextW(h, t, 64);
+    txtc = g_pal.btnTxt;
+    fill = g_pal.btnFace;
+    out  = g_pal.editBorder;
+
+    if (!IsWindowEnabled(h)) {
+        FillRound(dc, r, 8, g_pal.btnFace, g_pal.editBorder);
+        txtc = g_pal.txtMute;
+        bands = 1;
+        fill = g_pal.btnFace;
+    } else if (st->style == BSTYLE_PRIMARY) {
+        COLORREF a = st->down ? Shade(g_pal.accent, 0.82) :
+                     (st->hover ? Shade(g_pal.accent, 1.10) : g_pal.accent);
+        COLORREF b = st->down ? Shade(g_pal.accent2, 0.82) :
+                     (st->hover ? Shade(g_pal.accent2, 1.10) : g_pal.accent2);
+        {
+            /* clip the gradient to the rounded shape (no square corners) */
+            HRGN rg = CreateRoundRectRgn(r.left, r.top, r.right, r.bottom, 16, 16);
+            SelectClipRgn(dc, rg);
+            FillHGrad(dc, r, a, b, bands);
+            SelectClipRgn(dc, NULL);
+            DeleteObject(rg);
+        }
+        {
+            HPEN p = CreatePen(PS_SOLID, 1, Shade(b, 0.7));
+            HGDIOBJ op = SelectObject(dc, p);
+            HBRUSH nb = (HBRUSH)GetStockObject(NULL_BRUSH);
+            HGDIOBJ ob = SelectObject(dc, nb);
+            RoundRect(dc, r.left, r.top, r.right, r.bottom, 16, 16);
+            SelectObject(dc, ob);
+            SelectObject(dc, op);
+            DeleteObject(p);
+        }
+        txtc = g_pal.primTxt;
+    } else { /* ghost + toggle */
+        if (st->down)      { fill = g_pal.btnDn; }
+        else if (st->hover){ fill = g_pal.btnHi; out = Lerp(g_pal.editBorder, g_pal.accent, 0.55); }
+        else               { fill = g_pal.btnFace; }
+        FillRound(dc, r, 8, fill, out);
+    }
+
+    SetBkMode(dc, TRANSPARENT);
+    SelectObject(dc, st->font ? st->font : g_hFont);
+    SetTextColor(dc, txtc);
+    DrawTextW(dc, t, -1, &rt, DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
+
+    /* subtle bottom edge on ghost buttons */
+    if (st->style != BSTYLE_PRIMARY && IsWindowEnabled(h)) {
+        RECT e = r;
+        e.bottom -= 1; e.top = e.bottom - 1;
+        e.left += 6; e.right -= 6;
+        FillSolid(dc, e, Lerp(fill, g_pal.bg, 0.55));
+    }
+    (void)id;
+    EndPaint(h, &ps);
+}
+
+static LRESULT CALLBACK BtnProc(HWND h, UINT m, WPARAM w, LPARAM l)
+{
+    BTNSTATE *st = (BTNSTATE *)GetWindowLongPtrW(h, GWLP_USERDATA);
+    switch (m) {
+    case WM_CREATE: {
+        CREATESTRUCTW *cs = (CREATESTRUCTW *)l;
+        st = (BTNSTATE *)HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, sizeof(BTNSTATE));
+        if (!st) return -1;
+        st->style = (int)(INT_PTR)cs->lpCreateParams;
+        SetWindowLongPtrW(h, GWLP_USERDATA, (LONG_PTR)st);
+        return 0;
+    }
+    case WM_SETFONT:
+        if (st) st->font = (HFONT)w;
+        InvalidateRect(h, NULL, TRUE);
+        return 0;
+    case WM_MOUSEMOVE:
+        if (st && !st->hover) {
+            TRACKMOUSEEVENT t;
+            st->hover = 1;
+            ZeroMemory(&t, sizeof(t));
+            t.cbSize = sizeof(t);
+            t.dwFlags = TME_LEAVE;
+            t.hwndTrack = h;
+            TrackMouseEvent(&t);
+            InvalidateRect(h, NULL, TRUE);
+        }
+        return 0;
+    case WM_MOUSELEAVE:
+        if (st) { st->hover = 0; InvalidateRect(h, NULL, TRUE); }
+        return 0;
+    case WM_LBUTTONDOWN:
+        if (st) { st->down = 1; SetCapture(h); InvalidateRect(h, NULL, TRUE); }
+        return 0;
+    case WM_LBUTTONUP:
+        if (st && st->down) {
+            POINT pt;
+            RECT r;
+            st->down = 0;
+            if (GetCapture() == h) ReleaseCapture();
+            GetClientRect(h, &r);
+            pt.x = (short)LOWORD(l); pt.y = (short)HIWORD(l);
+            if (PtInRect(&r, pt))
+                SendMessageW(GetParent(h), WM_COMMAND,
+                             MAKEWPARAM(GetDlgCtrlID(h), BN_CLICKED), (LPARAM)h);
+            InvalidateRect(h, NULL, TRUE);
+        }
+        return 0;
+    case WM_CAPTURECHANGED:
+        if (st) { st->down = 0; InvalidateRect(h, NULL, TRUE); }
+        return 0;
+    case WM_ENABLE:
+        InvalidateRect(h, NULL, TRUE);
+        return 0;
+    case WM_ERASEBKGND:
+        return 1;
+    case WM_PAINT:
+        if (st) BtnPaint(h, st);
+        return 0;
+    case WM_GETDLGCODE:
+        return DLGC_BUTTON;
+    case WM_NCDESTROY:
+        if (st) { HeapFree(GetProcessHeap(), 0, st); SetWindowLongPtrW(h, GWLP_USERDATA, 0); }
+        return 0;
+    }
+    return DefWindowProcW(h, m, w, l);
+}
+
+/* edit/combo subclass: guarantees the dark fill even if the classic
+ * WM_CTLCOLOREDIT path is skipped, and repaints focus frames */
+static LRESULT CALLBACK FieldSubProc(HWND h, UINT m, WPARAM w, LPARAM l)
+{
+    WNDPROC old = (h == g_hUrl) ? g_oldUrl : (h == g_hDir) ? g_oldDir : g_oldFmt;
+    if (m == WM_ERASEBKGND) {
+        HDC dc = (HDC)w;
+        RECT r;
+        HBRUSH b;
+        GetClientRect(h, &r);
+        b = CreateSolidBrush(g_pal.editBg);
+        FillRect(dc, &r, b);
+        DeleteObject(b);
+        return 1;
+    }
+    if (m == WM_SETFOCUS || m == WM_KILLFOCUS) {
+        RECT *fr = (h == g_hUrl) ? &g_rcUrlF : (h == g_hDir) ? &g_rcDirF : &g_rcFmtF;
+        InvalidateRect(g_hMain, fr, FALSE);
+    }
+    return CallWindowProcW(old, h, m, w, l);
+}
+
+/* ------------------------------------------------------------------ */
 /* painting                                                            */
 /* ------------------------------------------------------------------ */
-static void PaintHeader(HDC dc, RECT rc)
+static void DrawFrameRect(HDC dc, RECT r, COLORREF col, int w)
 {
-    int cy = (rc.top + rc.bottom) / 2;
-    HFONT f1, f2;
-    HGDIOBJ of;
-    RECT line;
+    HPEN p = CreatePen(PS_SOLID, w, col);
+    HGDIOBJ op = SelectObject(dc, p);
+    HBRUSH nb = (HBRUSH)GetStockObject(NULL_BRUSH);
+    HGDIOBJ ob = SelectObject(dc, nb);
+    RoundRect(dc, r.left, r.top, r.right, r.bottom, 10, 10);
+    SelectObject(dc, ob);
+    SelectObject(dc, op);
+    DeleteObject(p);
+}
 
-    FillSolid(dc, rc, g_pal.headerBg);
-    line.left = rc.left; line.right = rc.right;
-    line.top = rc.bottom - 1; line.bottom = rc.bottom;
-    FillSolid(dc, line, g_pal.editBorder);
+static void PaintHeader(HDC dc)
+{
+    RECT rc = g_rcHeader;
+    int cy = HEADER_H / 2;
+    int fadeX;
 
-    /* spiral logo + orb core */
-    DrawSpiral(dc, rc.left + 40, cy, 0.60, g_pal.accent, g_pal.accent2);
-    DrawOrb(dc, rc.left + 40, cy, 6, g_pal.accent, g_pal.accent2, g_pal.headerBg);
+    FillVGrad(dc, rc, g_pal.headerBg, Lerp(g_pal.headerBg, g_pal.bg, 0.6), 16);
+
+    /* ambient brand glow behind the logo */
+    DrawGlow(dc, 46, cy, 46, g_pal.accent2, g_pal.headerBg);
+    DrawGlow(dc, 46, cy, 30, g_pal.accent, g_pal.headerBg);
+
+    /* rotating gradient spiral + pulsing core orb */
+    DrawOrb(dc, 46, cy, (int)(5.5 + 1.4 * sin(g_phase * 1.6)),
+            Lerp(g_pal.accent, RGB(255, 255, 255), 0.72),
+            g_pal.accent, g_pal.headerBg);
+    DrawSpiral(dc, 46, cy, 0.50, g_phase, g_pal.accent, g_pal.accent2);
 
     /* wordmark */
-    f1 = CreateFontW(-21, 0, 0, 0, FW_HEAVY, 0, 0, 0, DEFAULT_CHARSET,
-                     OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY,
-                     DEFAULT_PITCH | FF_DONTCARE, L"Segoe UI");
-    f2 = CreateFontW(-10, 0, 0, 0, FW_SEMIBOLD, 0, 0, 0, DEFAULT_CHARSET,
-                     OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY,
-                     DEFAULT_PITCH | FF_DONTCARE, L"Segoe UI");
-    of = SelectObject(dc, f1);
     SetBkMode(dc, TRANSPARENT);
+    SelectObject(dc, g_hFontWord);
     SetTextColor(dc, g_pal.txt);
-    SetTextCharacterExtra(dc, 1);
+    SetTextCharacterExtra(dc, 2);
     {
-        RECT rw = { rc.left + 76, cy - 24, rc.left + 340, cy };
+        RECT rw = { 84, 22, 400, 58 };
         DrawTextW(dc, L"3SVERSE", -1, &rw, DT_LEFT | DT_SINGLELINE | DT_VCENTER);
     }
-    SelectObject(dc, f2);
+    SelectObject(dc, g_hFontSub);
     SetTextColor(dc, g_pal.txtDim);
-    SetTextCharacterExtra(dc, 4);
+    SetTextCharacterExtra(dc, 6);
     {
-        RECT rs = { rc.left + 78, cy + 2, rc.left + 340, cy + 18 };
+        RECT rs = { 86, 57, 400, 76 };
         DrawTextW(dc, L"VIDEOGRABBER", -1, &rs, DT_LEFT | DT_SINGLELINE | DT_VCENTER);
     }
     SetTextCharacterExtra(dc, 0);
 
     /* brand gradient bar */
     {
-        int i, x0 = rc.left + 78, y0 = cy + 22;
-        RECT seg;
-        for (i = 0; i < 18; i++) {
-            seg.left = x0 + i * 5; seg.right = seg.left + 5;
-            seg.top = y0; seg.bottom = y0 + 3;
-            FillSolid(dc, seg, Lerp(g_pal.accent, g_pal.accent2, (double)i / 17.0));
-        }
+        RECT gb = { 86, 82, 266, 85 };
+        FillHGrad(dc, gb, g_pal.accent, g_pal.accent2, 24);
     }
 
-    SelectObject(dc, of);
-    DeleteObject(f1);
-    DeleteObject(f2);
+    /* separator + gradient accent line fading to the right */
+    {
+        RECT sep = { 0, HEADER_H - 1, CLIENT_W, HEADER_H };
+        FillSolid(dc, sep, Lerp(g_pal.headerBg, g_pal.editBorder, 0.85));
+        fadeX = (int)(CLIENT_W * 0.68);
+        {
+            RECT g1 = { 0, HEADER_H - 3, fadeX, HEADER_H - 1 };
+            RECT g2 = { fadeX, HEADER_H - 3, CLIENT_W, HEADER_H - 1 };
+            FillHGrad(dc, g1, g_pal.accent, g_pal.accent2, 26);
+            FillHGrad(dc, g2, g_pal.accent2, g_pal.headerBg, 12);
+        }
+    }
+}
+
+static void PaintBodyLabels(HDC dc)
+{
+    SetBkMode(dc, TRANSPARENT);
+    SelectObject(dc, g_hFont);
+    SetTextColor(dc, g_pal.txtDim);
+    {
+        RECT r1 = { 16, 124, 420, 142 };
+        RECT r2 = { 16, 190, 90, 208 };
+        RECT r3 = { 16, 236, 90, 254 };
+        DrawTextW(dc, L"Video / audio URL:", -1, &r1, DT_LEFT | DT_SINGLELINE | DT_VCENTER);
+        DrawTextW(dc, L"Format:",            -1, &r2, DT_LEFT | DT_SINGLELINE | DT_VCENTER);
+        DrawTextW(dc, L"Save to:",           -1, &r3, DT_LEFT | DT_SINGLELINE | DT_VCENTER);
+    }
+}
+
+static void PaintBodyFrames(HDC dc)
+{
+    COLORREF fr = g_pal.editBorder;
+    COLORREF frHi = g_pal.accent;
+
+    DrawFrameRect(dc, g_rcUrlF, (GetFocus() == g_hUrl) ? frHi : fr, (GetFocus() == g_hUrl) ? 2 : 1);
+    DrawFrameRect(dc, g_rcFmtF, (GetFocus() == g_hFmt) ? frHi : fr, (GetFocus() == g_hFmt) ? 2 : 1);
+    DrawFrameRect(dc, g_rcDirF, (GetFocus() == g_hDir) ? frHi : fr, (GetFocus() == g_hDir) ? 2 : 1);
+    DrawFrameRect(dc, g_rcLog,  (GetFocus() == g_hLog) ? frHi : fr, (GetFocus() == g_hLog) ? 2 : 1);
 }
 
 static void PaintProgress(HDC dc)
@@ -716,15 +945,20 @@ static void PaintProgress(HDC dc)
     WCHAR t[64];
     HGDIOBJ of;
 
-    FillRound(dc, r, 7, g_pal.progTrack, g_pal.editBorder);
+    FillRound(dc, r, 8, g_pal.progTrack, g_pal.editBorder);
     if (pct > 100) pct = 100;
     if (pct >= 0 && g_running) {
-        int w = (r.right - r.left - 4) * pct / 100;
+        int w = (r.right - r.left - 6) * pct / 100;
         if (w > 0) {
             RECT f;
-            f.left = r.left + 2; f.right = r.left + 2 + w;
-            f.top = r.top + 2;   f.bottom = r.bottom - 2;
-            FillRound(dc, f, 5, g_pal.progFill, g_pal.progFill);
+            HRGN rg;
+            f.left = r.left + 3; f.right = r.left + 3 + w;
+            f.top = r.top + 3;   f.bottom = r.bottom - 3;
+            rg = CreateRoundRectRgn(f.left, f.top, f.right, f.bottom, 6, 6);
+            SelectClipRgn(dc, rg);
+            FillHGrad(dc, f, g_pal.accent, g_pal.accent2, 24);
+            SelectClipRgn(dc, NULL);
+            DeleteObject(rg);
         }
     }
     if (g_running) {
@@ -742,14 +976,17 @@ static void PaintProgress(HDC dc)
 
 static void PaintFooter(HDC dc)
 {
-    RECT r;
-    r.left = 14; r.top = CLIENT_H - 26; r.right = CLIENT_W - 14; r.bottom = CLIENT_H - 8;
+    RECT r1, r2;
     SetBkMode(dc, TRANSPARENT);
     SelectObject(dc, g_hFontSm);
     SetTextColor(dc, g_pal.txtMute);
+    r1.left = 16;  r1.top = CLIENT_H - 30; r1.right = 520;     r1.bottom = CLIENT_H - 8;
+    r2.left = 520; r2.top = CLIENT_H - 30; r2.right = CLIENT_W - 16; r2.bottom = CLIENT_H - 8;
     DrawTextW(dc,
-        L"Powered by the yt-dlp engine - runs 100% locally - MIT License - 3SVerse",
-        -1, &r, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
+        L"Powered by the yt-dlp engine - runs 100% locally - MIT License",
+        -1, &r1, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
+    SetTextColor(dc, Lerp(g_pal.accent, g_pal.txtDim, 0.25));
+    DrawTextW(dc, L"3SVerse - 3sverse.com", -1, &r2, DT_RIGHT | DT_VCENTER | DT_SINGLELINE);
 }
 
 static void OnPaint(HWND hwnd)
@@ -764,11 +1001,19 @@ static void OnPaint(HWND hwnd)
         HBITMAP bmp = CreateCompatibleBitmap(dc, rc.right, rc.bottom);
         HGDIOBJ ob = SelectObject(mem, bmp);
 
+        /* canvas + ambient tint glows (fake alpha, pure GDI) */
         FillSolid(mem, rc, g_pal.bg);
-        {
-            RECT hdr = { 0, 0, rc.right, HEADER_H };
-            PaintHeader(mem, hdr);
-        }
+        DrawGlow(mem, CLIENT_W + 60, CLIENT_H + 60, 300, g_pal.accent2, g_pal.bg);
+        DrawGlow(mem, -40, CLIENT_H + 90, 230, g_pal.accent, g_pal.bg);
+
+        /* faint rotating brand watermark spiral, bottom-right */
+        DrawSpiral(mem, CLIENT_W - 130, CLIENT_H - 60, 2.1, 0.9,
+                   Lerp(g_pal.bg, g_pal.accent, 0.10),
+                   Lerp(g_pal.bg, g_pal.accent2, 0.10));
+
+        PaintHeader(mem);
+        PaintBodyLabels(mem);
+        PaintBodyFrames(mem);
         PaintProgress(mem);
         PaintFooter(mem);
 
@@ -781,40 +1026,6 @@ static void OnPaint(HWND hwnd)
 }
 
 /* ------------------------------------------------------------------ */
-/* owner-draw buttons                                                  */
-/* ------------------------------------------------------------------ */
-static void DrawButton(HDC dc, DRAWITEMSTRUCT *d)
-{
-    RECT r = d->rcItem;
-    int id = (int)d->CtlID;
-    COLORREF fill = g_pal.btnFace, txt = g_pal.btnTxt, out = g_pal.editBorder;
-    WCHAR t[64];
-    HGDIOBJ of;
-
-    if (id == IDC_GO) {
-        fill = g_pal.accent; txt = g_pal.primTxt; out = g_pal.accent;
-        if (IsHover(d->hwndItem)) fill = Shade(g_pal.accent, 1.12);
-    } else {
-        if (IsHover(d->hwndItem)) fill = g_pal.btnHi;
-    }
-    if (d->itemState & ODS_SELECTED) {
-        if (id == IDC_GO) fill = Shade(g_pal.accent, 0.82);
-        else              fill = g_pal.btnDn;
-    }
-    if (d->itemState & ODS_DISABLED) {
-        fill = g_pal.btnFace; txt = g_pal.txtMute;
-    }
-
-    FillRound(dc, r, 7, fill, out);
-    GetWindowTextW(d->hwndItem, t, 64);
-    SetBkMode(dc, TRANSPARENT);
-    of = SelectObject(dc, g_hFont);
-    SetTextColor(dc, txt);
-    DrawTextW(dc, t, -1, &r, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
-    SelectObject(dc, of);
-}
-
-/* ------------------------------------------------------------------ */
 /* wndproc                                                             */
 /* ------------------------------------------------------------------ */
 static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
@@ -822,77 +1033,101 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
     switch (msg) {
     case WM_CREATE: {
         HINSTANCE h = ((LPCREATESTRUCTW)lp)->hInstance;
+        int itemH;
 
-        CreateWindowW(L"STATIC", L"Video / audio URL:", WS_CHILD | WS_VISIBLE,
-            14, 102, 220, 16, hwnd, NULL, h, NULL);
-        g_hUrl = CreateWindowW(L"EDIT", L"", WS_CHILD | WS_VISIBLE | WS_BORDER | WS_TABSTOP | ES_AUTOHSCROLL,
-            14, 120, CLIENT_W - 28, 26, hwnd, (HMENU)IDC_URL, h, NULL);
+        g_rcHeader.left = 0; g_rcHeader.top = 0;
+        g_rcHeader.right = CLIENT_W; g_rcHeader.bottom = HEADER_H;
 
-        CreateWindowW(L"STATIC", L"Format:", WS_CHILD | WS_VISIBLE,
-            14, 160, 70, 16, hwnd, NULL, h, NULL);
-        g_hFmt = CreateWindowW(L"COMBOBOX", L"", WS_CHILD | WS_VISIBLE | CBS_DROPDOWNLIST | WS_VSCROLL | WS_TABSTOP,
-            90, 156, 300, 200, hwnd, (HMENU)IDC_FMT, h, NULL);
+        g_hFont     = CreateFontW(-15, 0, 0, 0, FW_NORMAL, 0, 0, 0, DEFAULT_CHARSET,
+                                  OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY,
+                                  DEFAULT_PITCH | FF_DONTCARE, L"Segoe UI");
+        g_hFontBtn  = CreateFontW(-15, 0, 0, 0, FW_SEMIBOLD, 0, 0, 0, DEFAULT_CHARSET,
+                                  OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY,
+                                  DEFAULT_PITCH | FF_DONTCARE, L"Segoe UI");
+        g_hMono     = CreateFontW(-13, 0, 0, 0, FW_NORMAL, 0, 0, 0, DEFAULT_CHARSET,
+                                  OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY,
+                                  FIXED_PITCH | FF_MODERN, L"Consolas");
+        g_hFontSm   = CreateFontW(-11, 0, 0, 0, FW_NORMAL, 0, 0, 0, DEFAULT_CHARSET,
+                                  OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY,
+                                  DEFAULT_PITCH | FF_DONTCARE, L"Segoe UI");
+        g_hFontWord = CreateFontW(-26, 0, 0, 0, FW_HEAVY, 0, 0, 0, DEFAULT_CHARSET,
+                                  OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY,
+                                  DEFAULT_PITCH | FF_DONTCARE, L"Segoe UI");
+        g_hFontSub  = CreateFontW(-10, 0, 0, 0, FW_SEMIBOLD, 0, 0, 0, DEFAULT_CHARSET,
+                                  OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY,
+                                  DEFAULT_PITCH | FF_DONTCARE, L"Segoe UI");
+
+        /* URL row */
+        g_hUrl = CreateWindowW(L"EDIT", L"",
+            WS_CHILD | WS_VISIBLE | WS_TABSTOP | ES_AUTOHSCROLL,
+            14, 146, 672, 30, hwnd, (HMENU)IDC_URL, h, NULL);
+
+        /* Format row */
+        g_hFmt = CreateWindowW(L"COMBOBOX", L"",
+            WS_CHILD | WS_VISIBLE | CBS_DROPDOWNLIST | WS_VSCROLL | WS_TABSTOP,
+            90, 186, 320, 200, hwnd, (HMENU)IDC_FMT, h, NULL);
         SendMessageW(g_hFmt, CB_ADDSTRING, 0, (LPARAM)L"Best MP4 (recommended)");
         SendMessageW(g_hFmt, CB_ADDSTRING, 0, (LPARAM)L"Best quality (any format)");
         SendMessageW(g_hFmt, CB_ADDSTRING, 0, (LPARAM)L"Audio only - M4A");
         SendMessageW(g_hFmt, CB_ADDSTRING, 0, (LPARAM)L"Audio only - MP3 (needs ffmpeg.exe)");
         SendMessageW(g_hFmt, CB_SETCURSEL, 0, 0);
 
-        CreateWindowW(L"STATIC", L"Save to:", WS_CHILD | WS_VISIBLE,
-            14, 198, 70, 16, hwnd, NULL, h, NULL);
-        g_hDir = CreateWindowW(L"EDIT", L"", WS_CHILD | WS_VISIBLE | WS_BORDER | WS_TABSTOP | ES_AUTOHSCROLL,
-            90, 194, 430, 26, hwnd, (HMENU)IDC_DIR, h, NULL);
-        g_hBrowse = CreateWindowW(L"BUTTON", L"Browse...",
-            WS_CHILD | WS_VISIBLE | BS_OWNERDRAW | WS_TABSTOP,
-            530, 192, 136, 28, hwnd, (HMENU)IDC_BROWSE, h, NULL);
-        TrackHover(g_hBrowse);
+        /* Save-to row */
+        g_hDir = CreateWindowW(L"EDIT", L"",
+            WS_CHILD | WS_VISIBLE | WS_TABSTOP | ES_AUTOHSCROLL,
+            90, 232, 470, 30, hwnd, (HMENU)IDC_DIR, h, NULL);
 
-        g_hGo = CreateWindowW(L"BUTTON", L"Download",
-            WS_CHILD | WS_VISIBLE | BS_OWNERDRAW | BS_DEFPUSHBUTTON | WS_TABSTOP,
-            90, 232, 150, 34, hwnd, (HMENU)IDC_GO, h, NULL);
-        g_hCancel = CreateWindowW(L"BUTTON", L"Cancel",
-            WS_CHILD | WS_VISIBLE | BS_OWNERDRAW | WS_TABSTOP,
-            250, 232, 90, 34, hwnd, (HMENU)IDC_CANCEL, h, NULL);
-        g_hOpen = CreateWindowW(L"BUTTON", L"Open folder",
-            WS_CHILD | WS_VISIBLE | BS_OWNERDRAW | WS_TABSTOP,
-            350, 232, 130, 34, hwnd, (HMENU)IDC_OPEN, h, NULL);
-        TrackHover(g_hGo);
-        TrackHover(g_hCancel);
-        TrackHover(g_hOpen);
+        /* action buttons (custom class — self-painting) */
+        g_hGo = CreateWindowW(BTN_CLASSW, L"Download",
+            WS_CHILD | WS_VISIBLE | WS_TABSTOP,
+            14, 280, 190, 44, hwnd, (HMENU)IDC_GO, h, (LPVOID)(INT_PTR)BSTYLE_PRIMARY);
+        g_hCancel = CreateWindowW(BTN_CLASSW, L"Cancel",
+            WS_CHILD | WS_VISIBLE | WS_TABSTOP,
+            214, 280, 104, 44, hwnd, (HMENU)IDC_CANCEL, h, (LPVOID)(INT_PTR)BSTYLE_GHOST);
+        g_hOpen = CreateWindowW(BTN_CLASSW, L"Open folder",
+            WS_CHILD | WS_VISIBLE | WS_TABSTOP,
+            328, 280, 150, 44, hwnd, (HMENU)IDC_OPEN, h, (LPVOID)(INT_PTR)BSTYLE_GHOST);
+        g_hBrowse = CreateWindowW(BTN_CLASSW, L"Browse...",
+            WS_CHILD | WS_VISIBLE | WS_TABSTOP,
+            572, 230, 114, 34, hwnd, (HMENU)IDC_BROWSE, h, (LPVOID)(INT_PTR)BSTYLE_GHOST);
+        g_hTheme = CreateWindowW(BTN_CLASSW, g_dark ? L"Light mode" : L"Dark mode",
+            WS_CHILD | WS_VISIBLE | WS_TABSTOP,
+            566, 26, 120, 34, hwnd, (HMENU)IDC_THEME, h, (LPVOID)(INT_PTR)BSTYLE_TOGGLE);
 
-        g_hTheme = CreateWindowW(L"BUTTON", g_dark ? L"Light mode" : L"Dark mode",
-            WS_CHILD | WS_VISIBLE | BS_OWNERDRAW,
-            CLIENT_W - 122, 20, 106, 30, hwnd, (HMENU)IDC_THEME, h, NULL);
-        TrackHover(g_hTheme);
-
-        /* progress bar region (custom-painted by the parent) */
-        g_rcProg.left = 14; g_rcProg.top = 282;
-        g_rcProg.right = CLIENT_W - 14; g_rcProg.bottom = 304;
-
+        /* log console */
         g_hLog = CreateWindowW(L"EDIT", L"",
-            WS_CHILD | WS_VISIBLE | WS_BORDER | WS_VSCROLL | WS_HSCROLL | WS_TABSTOP |
+            WS_CHILD | WS_VISIBLE | WS_VSCROLL | WS_HSCROLL | WS_TABSTOP |
             ES_MULTILINE | ES_READONLY | ES_AUTOVSCROLL,
-            14, 316, CLIENT_W - 28, 206, hwnd, (HMENU)IDC_LOG, h, NULL);
+            14, 382, 672, 192, hwnd, (HMENU)IDC_LOG, h, NULL);
 
-        g_hFont = CreateFontW(-15, 0, 0, 0, FW_NORMAL, 0, 0, 0, DEFAULT_CHARSET,
-                              OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY,
-                              DEFAULT_PITCH | FF_DONTCARE, L"Segoe UI");
-        g_hMono = CreateFontW(-13, 0, 0, 0, FW_NORMAL, 0, 0, 0, DEFAULT_CHARSET,
-                              OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY,
-                              FIXED_PITCH | FF_MODERN, L"Consolas");
-        g_hFontSm = CreateFontW(-11, 0, 0, 0, FW_NORMAL, 0, 0, 0, DEFAULT_CHARSET,
-                                OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY,
-                                DEFAULT_PITCH | FF_DONTCARE, L"Segoe UI");
+        /* fonts onto controls */
+        SendMessageW(g_hUrl, WM_SETFONT, (WPARAM)g_hFont, TRUE);
+        SendMessageW(g_hFmt, WM_SETFONT, (WPARAM)g_hFont, TRUE);
+        SendMessageW(g_hDir, WM_SETFONT, (WPARAM)g_hFont, TRUE);
+        SendMessageW(g_hLog, WM_SETFONT, (WPARAM)g_hMono, TRUE);
+        SendMessageW(g_hGo,     WM_SETFONT, (WPARAM)g_hFontBtn, TRUE);
+        SendMessageW(g_hCancel, WM_SETFONT, (WPARAM)g_hFontBtn, TRUE);
+        SendMessageW(g_hOpen,   WM_SETFONT, (WPARAM)g_hFontBtn, TRUE);
+        SendMessageW(g_hBrowse, WM_SETFONT, (WPARAM)g_hFontBtn, TRUE);
+        SendMessageW(g_hTheme,  WM_SETFONT, (WPARAM)g_hFontBtn, TRUE);
 
-        SendMessageW(g_hUrl,  WM_SETFONT, (WPARAM)g_hFont, TRUE);
-        SendMessageW(g_hFmt,  WM_SETFONT, (WPARAM)g_hFont, TRUE);
-        SendMessageW(g_hDir,  WM_SETFONT, (WPARAM)g_hFont, TRUE);
-        SendMessageW(g_hLog,  WM_SETFONT, (WPARAM)g_hMono, TRUE);
-        SendMessageW(g_hGo,     WM_SETFONT, (WPARAM)g_hFont, TRUE);
-        SendMessageW(g_hCancel, WM_SETFONT, (WPARAM)g_hFont, TRUE);
-        SendMessageW(g_hOpen,   WM_SETFONT, (WPARAM)g_hFont, TRUE);
-        SendMessageW(g_hBrowse, WM_SETFONT, (WPARAM)g_hFont, TRUE);
-        SendMessageW(g_hTheme,  WM_SETFONT, (WPARAM)g_hFont, TRUE);
+        /* combo field metrics -> frame rect */
+        SendMessageW(g_hFmt, CB_SETITEMHEIGHT, 0, 22);
+        itemH = (int)SendMessageW(g_hFmt, CB_GETITEMHEIGHT, 0, 0);
+        if (itemH < 10) itemH = 22;
+        g_fmtFieldH = itemH + 2 * GetSystemMetrics(SM_CYEDGE);
+
+        /* field frame rects (parent-painted rounded borders) */
+        g_rcUrlF.left = 13;  g_rcUrlF.top = 145; g_rcUrlF.right = 687; g_rcUrlF.bottom = 177;
+        g_rcFmtF.left = 89;  g_rcFmtF.top = 185; g_rcFmtF.right = 411; g_rcFmtF.bottom = 186 + g_fmtFieldH + 2;
+        g_rcDirF.left = 89;  g_rcDirF.top = 231; g_rcDirF.right = 561; g_rcDirF.bottom = 263;
+        g_rcProg.left = 14;  g_rcProg.top = 340; g_rcProg.right = 686; g_rcProg.bottom = 368;
+        g_rcLog.left  = 13;  g_rcLog.top  = 381; g_rcLog.right  = 687; g_rcLog.bottom  = 575;
+
+        /* subclass fields: guaranteed dark fill + focus frame repaints */
+        g_oldUrl = (WNDPROC)SetWindowLongPtrW(g_hUrl, GWLP_WNDPROC, (LONG_PTR)FieldSubProc);
+        g_oldFmt = (WNDPROC)SetWindowLongPtrW(g_hFmt, GWLP_WNDPROC, (LONG_PTR)FieldSubProc);
+        g_oldDir = (WNDPROC)SetWindowLongPtrW(g_hDir, GWLP_WNDPROC, (LONG_PTR)FieldSubProc);
 
         /* default save-to = Downloads */
         {
@@ -905,7 +1140,8 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
             }
         }
 
-        SetTimer(hwnd, 1, 250, NULL);
+        SetTimer(hwnd, 1, 250, NULL);   /* log drain + progress */
+        SetTimer(hwnd, 2, 45,  NULL);   /* brand animation */
         return 0;
     }
     case WM_TIMER:
@@ -927,6 +1163,10 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
                 HeapFree(GetProcessHeap(), 0, chunk);
             }
             InvalidateRect(hwnd, &g_rcProg, FALSE);
+        } else if (wp == 2) {
+            g_phase += 0.05;
+            if (!IsIconic(hwnd))
+                InvalidateRect(hwnd, &g_rcHeader, FALSE);
         }
         return 0;
     case WM_APP_DONE:
@@ -942,19 +1182,8 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
         return 0;
     case WM_ERASEBKGND:
         return 1;
-    case WM_DRAWITEM:
-        if (((DRAWITEMSTRUCT *)lp)->CtlType == ODT_BUTTON) {
-            DrawButton((HDC)wp, (DRAWITEMSTRUCT *)lp);
-            return TRUE;
-        }
-        break;
     case WM_CTLCOLOREDIT: {
         HDC dc = (HDC)wp;
-        if ((HWND)lp == g_hLog) {
-            SetTextColor(dc, g_pal.logTxt);
-            SetBkColor(dc, g_pal.logBg);
-            return (LRESULT)g_brLog;
-        }
         SetTextColor(dc, g_pal.editTxt);
         SetBkColor(dc, g_pal.editBg);
         return (LRESULT)g_brEdit;
@@ -970,9 +1199,9 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
             SetBkColor(dc, g_pal.logBg);
             return (LRESULT)g_brLog;
         }
-        SetTextColor(dc, g_pal.txtDim);
-        SetBkColor(dc, g_pal.bg);
-        return (LRESULT)g_brBg;
+        SetTextColor(dc, g_pal.editTxt);
+        SetBkColor(dc, g_pal.editBg);
+        return (LRESULT)g_brEdit;
     }
     case WM_COMMAND:
         switch (LOWORD(wp)) {
@@ -994,9 +1223,13 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
     case WM_DESTROY:
         StopJob();
         KillTimer(hwnd, 1);
+        KillTimer(hwnd, 2);
         if (g_hFont)     DeleteObject(g_hFont);
+        if (g_hFontBtn)  DeleteObject(g_hFontBtn);
         if (g_hMono)     DeleteObject(g_hMono);
         if (g_hFontSm)   DeleteObject(g_hFontSm);
+        if (g_hFontWord) DeleteObject(g_hFontWord);
+        if (g_hFontSub)  DeleteObject(g_hFontSub);
         if (g_brBg)      DeleteObject(g_brBg);
         if (g_brEdit)    DeleteObject(g_brEdit);
         if (g_brLog)     DeleteObject(g_brLog);
@@ -1008,7 +1241,7 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
 
 int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR cmdLine, int nShow)
 {
-    WNDCLASSW wc;
+    WNDCLASSW wc, bc;
     MSG msg;
     RECT wr;
 
@@ -1026,13 +1259,22 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR cmdLine, int nShow)
     ApplyPalette();
     RebuildBrushes();
 
+    /* custom self-painting button class (v1.1.0 blank-button root fix) */
+    ZeroMemory(&bc, sizeof(bc));
+    bc.lpfnWndProc = BtnProc;
+    bc.hInstance = hInst;
+    bc.hCursor = LoadCursor(NULL, IDC_HAND);
+    bc.hbrBackground = NULL;
+    bc.lpszClassName = BTN_CLASSW;
+    RegisterClassW(&bc);
+
     ZeroMemory(&wc, sizeof(wc));
     wc.lpfnWndProc = WndProc;
     wc.hInstance = hInst;
     wc.hCursor = LoadCursor(NULL, IDC_ARROW);
     wc.hIcon = LoadIconW(hInst, MAKEINTRESOURCEW(1));
     if (!wc.hIcon) wc.hIcon = LoadIconW(NULL, (LPCWSTR)IDI_APPLICATION);
-    wc.hbrBackground = (HBRUSH)(COLOR_BTNFACE + 1);
+    wc.hbrBackground = NULL;
     wc.lpszClassName = APP_CLASSW;
     RegisterClassW(&wc);
 
@@ -1040,7 +1282,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR cmdLine, int nShow)
     AdjustWindowRect(&wr, WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU | WS_MINIMIZEBOX, FALSE);
 
     g_hMain = CreateWindowW(APP_CLASSW, APP_TITLEW,
-        WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU | WS_MINIMIZEBOX,
+        WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU | WS_MINIMIZEBOX | WS_CLIPCHILDREN,
         CW_USEDEFAULT, CW_USEDEFAULT,
         wr.right - wr.left, wr.bottom - wr.top, NULL, NULL, hInst, NULL);
     if (!g_hMain) return 1;

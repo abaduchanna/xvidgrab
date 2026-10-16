@@ -1,7 +1,7 @@
 ; 3SVerse VideoGrabber setup — Inno Setup 6
 ; PrivilegesRequired=lowest -> per-user install into %LOCALAPPDATA%, no UAC
 #define MyAppName "3SVerse VideoGrabber"
-#define MyAppVersion "1.1.0"
+#define MyAppVersion "1.2.0"
 #define MyAppPublisher "3S Verse"
 #define MyAppExeName "VideoGrabber.exe"
 
@@ -23,6 +23,9 @@ SetupIconFile=src\icon.ico
 Compression=lzma2/max
 SolidCompression=yes
 WizardStyle=modern
+WizardImageFile=setup_sidebar.bmp
+WizardSmallImageFile=setup_mark.bmp
+WizardImageStretch=no
 PrivilegesRequired=lowest
 UninstallDisplayIcon={app}\{#MyAppExeName}
 CloseApplications=yes

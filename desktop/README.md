@@ -12,16 +12,37 @@ engine it drives is **yt-dlp** ([github.com/yt-dlp/yt-dlp](https://github.com/yt
 which is public-domain software (The Unlicense). Nothing in this project reuses or
 rebrands anyone else's proprietary installer.
 
-## What's new in v1.1.0 — 3SVerse rebrand
+## What's new in v1.2.0 — "Halo" visual overhaul
+
+- **Bug fix (v1.1.0 regression):** on some machines the owner-drawn buttons could
+  render as blank boxes. v1.2.0 replaces that mechanism entirely — every button is
+  now a custom self-painting window class (`3SVBtn`) with no `BS_OWNERDRAW` /
+  `WM_DRAWITEM` dependency, so the UI can no longer blank out.
+- **Animated 3SVerse brand header**: the gradient **spiral** logo now slowly
+  rotates and the glowing **orb** core pulses (subtle 22 fps GDI animation,
+  header-only repaint so the CPU stays cool).
+- **Gradient Download button** (cyan → violet) with hover/press states; ghost-style
+  Cancel / Open folder / Browse buttons with accent hover borders.
+- **Focus-accented rounded frames** around the URL field, format combo, save-to
+  field and log console — the focused control lights up in 3SVerse cyan.
+- **Ambient branding**: soft brand-tint glows in the window corners and a faint
+  spiral watermark on the canvas.
+- **Gradient progress bar** (cyan → violet, clipped to a rounded shape) with a
+  Ready / Downloading… / percent overlay.
+- **Dark & light themes** — both fully branded — with the persisted one-click
+  toggle, plus a Win11 caption color that matches the header and a gradient accent
+  line under the header.
+- **Branded installer**: dark 3SVerse wizard sidebar + spiral mark.
+
+## What was new in v1.1.0 — 3SVerse rebrand
 
 - **Full 3SVerse branding**: header with the gradient **spiral** logo, glowing
   **orb** core, 3SVERSE wordmark and brand gradient bar (cyan → violet).
 - **Dark & light themes** with a one-click **Light mode / Dark mode** toggle
   button in the header — the choice is persisted per user and applied on start
   (including a dark native title bar on Windows 10/11 in dark mode).
-- **Custom skin** for every control: rounded owner-drawn buttons with hover
-  states, themed URL/format/folder fields, dark log console, and a custom
-  rounded progress bar with a percent overlay.
+- Custom skin for every control: themed URL/format/folder fields, dark log
+  console, and a custom rounded progress bar with a percent overlay.
 - New 3SVerse app icon (spiral + orb on a dark tile).
 
 ## Features
@@ -39,12 +60,13 @@ rebrands anyone else's proprietary installer.
 - Live progress bar parsed from yt-dlp's real `[download] 42.3%` lines, plus a
   complete engine log so failures always show the exact reason.
 - Cancel button kills the running engine immediately.
-- Dark / light theme toggle (persisted), 3SVerse-branded UI.
+- Dark / light theme toggle (persisted), fully 3SVerse-branded UI with animated
+  spiral + orb logo, gradient buttons and focus-accented fields.
 
 ## Install
 
 ### Setup (recommended)
-1. Download `3SVerse_VideoGrabber_v1.1.0_Setup.exe` from
+1. Download `3SVerse_VideoGrabber_v1.2.0_Setup.exe` from
    [desktop releases](https://github.com/abaduchanna/xvidgrab/releases?q=desktop-v&expanded=true).
 2. Run it — no administrator rights needed (installs into
    `%LOCALAPPDATA%\3SVerse\VideoGrabber`).
