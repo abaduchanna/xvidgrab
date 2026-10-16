@@ -41,14 +41,16 @@ jobs:
         shell: pwsh
         run: |
           windres src\icon.rc -O coff -o src\icon_res.o
-          if ($LASTEXITCODE -ne 0) { throw "windres failed" }
+          if ($LASTEXITCODE -ne 0) { throw "windres icon.rc failed" }
+          windres src\brand.rc -O coff -o src\brand_res.o
+          if ($LASTEXITCODE -ne 0) { throw "windres brand.rc failed" }
 
       - name: Compile VideoGrabber.exe
         shell: pwsh
         run: |
-          gcc src\main.c src\icon_res.o -o dist\VideoGrabber.exe `
+          gcc src\main.c src\icon_res.o src\brand_res.o -o dist\VideoGrabber.exe `
             -mwindows `
-            -lcomctl32 -lshell32 -lole32 -lshlwapi -lgdi32 -luser32 -ladvapi32 -lkernel32 -s
+            -lcomctl32 -lshell32 -lole32 -lshlwapi -lgdi32 -luser32 -ladvapi32 -lkernel32 -lgdiplus -s
           if ($LASTEXITCODE -ne 0) { throw "gcc failed" }
           Get-Item dist\VideoGrabber.exe | Select-Object Name,Length
 

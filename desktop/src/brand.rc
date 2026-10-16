@@ -1,0 +1,4 @@
+/* 3SVerse brand art resources — numeric IDs mandatory (RC2135, no headers) */
+101 RCDATA "brand/logo.png"
+102 RCDATA "brand/spiral.png"
+103 RCDATA "brand/orb.png"

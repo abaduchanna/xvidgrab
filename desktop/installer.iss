@@ -1,7 +1,7 @@
 ; 3SVerse VideoGrabber setup — Inno Setup 6
 ; PrivilegesRequired=lowest -> per-user install into %LOCALAPPDATA%, no UAC
 #define MyAppName "3SVerse VideoGrabber"
-#define MyAppVersion "1.2.0"
+#define MyAppVersion "1.3.0"
 #define MyAppPublisher "3S Verse"
 #define MyAppExeName "VideoGrabber.exe"
 

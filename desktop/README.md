@@ -12,7 +12,35 @@ engine it drives is **yt-dlp** ([github.com/yt-dlp/yt-dlp](https://github.com/yt
 which is public-domain software (The Unlicense). Nothing in this project reuses or
 rebrands anyone else's proprietary installer.
 
-## What's new in v1.2.0 — "Halo" visual overhaul
+## What's new in v1.3.0 — the real 3SVerse "Studio" brand (xfer design system)
+
+- **Brand cloned 1:1 from 3SVerse xfer** (the WiFi Transfer PC dashboard is the
+  3SVerse brand reference — owner: "xfer 3sverse ki branding hai"):
+  - **Near-black canvas `#07060b`** with the warm off-white text `#f5f1e6`
+    (the exact xfer / 3sverse.com tokens).
+  - **The real 3SVerse wordmark** (`logo.png` — the same standardized asset the
+    Android apps use) centered in a stacked header, plus the mono letter-spaced
+    title with the **brand cyan highlight** (`3SVERSE VIDEOGRABBER`) and the
+    tiny cyan eyebrow line (`PC DOWNLOADER · YT-DLP ENGINE · 100% LOCAL`).
+  - **The actual brand art from xfer**: the hero ring **spiral** (top-right,
+    120s/turn + 16px/12s float) and the glossy **orb** (bottom-left, 140s/turn +
+    13s float) — the original assets, rendered with **GDI+** (per-pixel alpha,
+    quality rotation, 22 fps, double-buffered so there is no flicker).
+  - **Cards** (`#0d0c14`, border `#232130`, radius 14) around URL / output /
+    log, with **mono letter-spaced uppercase labels** (`#9b97b3`) and inset
+    `#12101a` fields.
+  - **Status chip** — the xfer-style pill with a lime dot when ready and a
+    pulsing cyan dot with live percent while downloading.
+  - **CTAs**: cyan → magenta gradient (`#6ee7ef` → `#e44bd7`) with dark text,
+    ghost buttons with `#232130` borders that light up cyan on hover.
+  - **The standard 3SVerse footer strip**: `DEVELOPED BY WWW.3SVERSE.COM`
+    centered + version right — the same fixed strip every 3SVerse surface uses.
+  - **Dark & light themes** — dark is the exact xfer look; light is the same
+    hues on warm paper. Toggle + persistence + DWM caption unchanged.
+- Brand art ships inside the exe (RCDATA resources), so the app stays a
+  single self-contained binary that works fully offline.
+
+## What was new in v1.2.0 — "Halo" visual overhaul (superseded by v1.3.0)
 
 - **Bug fix (v1.1.0 regression):** on some machines the owner-drawn buttons could
   render as blank boxes. v1.2.0 replaces that mechanism entirely — every button is

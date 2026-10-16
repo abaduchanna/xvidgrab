@@ -1,23 +1,32 @@
-/* 3SVerse VideoGrabber v1.2.0 — free & open video/audio downloader GUI (yt-dlp engine)
+/* 3SVerse VideoGrabber v1.3.0 — free & open video/audio downloader GUI (yt-dlp engine)
  * MIT License — Copyright (c) 2026 Abad Umair Channa / 3S Verse
  * Engine: yt-dlp (https://github.com/yt-dlp/yt-dlp) — public domain (The Unlicense)
  *
- * v1.2.0 — "3SVerse Halo" full visual overhaul (fixes v1.1.0 blank-button bug):
- *   - root cause of v1.1.0 blank buttons: BS_OWNERDRAW + WM_DRAWITEM plumbing
- *     failed to render on real machines -> buttons rendered as blank boxes.
- *     v1.2.0 removes that entire dependency: all buttons are a custom
- *     self-painting window class ("3SVBtn") that cannot blank out.
- *   - labels are painted directly by the parent (no STATIC child controls)
- *   - animated 3SVerse brand header: rotating gradient spiral + pulsing orb
- *   - gradient Download button (cyan -> violet), ghost-style secondary buttons
- *   - focus-accented rounded frames around edits / combo / log
- *   - faint rotating spiral watermark on the canvas, gradient progress bar
- *   - dark & light themes, both fully branded; theme persisted in
- *     HKCU\Software\3SVerse\VideoGrabber; DWM dark title bar + caption color
+ * v1.3.0 — "Studio" brand system, cloned 1:1 from the 3SVerse xfer PC receiver
+ * (owner order: "xfer 3sverse ki branding hai" — the xfer dashboard IS the brand):
+ *   - near-black canvas #07060b, warm text #f5f1e6 (exact xfer values)
+ *   - the real 3SVerse wordmark (logo.png, same file the Android apps use)
+ *     centered in a stacked header: logo + mono letter-spaced title with the
+ *     brand cyan highlight + tiny cyan eyebrow line
+ *   - the hero ring spiral (top-right, 120s/turn + 16px/12s float) and the
+ *     glossy orb (bottom-left, 140s/turn + 13s float) — the ACTUAL brand art
+ *     from xfer (spiral/orb assets), rendered with GDI+ (alpha + rotation)
+ *   - cards #0d0c14 / border #232130 / radius 14, fields #12101a
+ *   - chip pill with lime status dot (cyan pulsing while downloading)
+ *   - CTAs: cyan->magenta gradient (#6ee7ef -> #e44bd7) with dark text,
+ *     ghost buttons with #232130 borders that light up cyan on hover
+ *   - mono letter-spaced uppercase labels (#9b97b3)
+ *   - the standard fixed 3SVerse footer strip: "DEVELOPED BY WWW.3SVERSE.COM"
+ *     + version right (same as xfer PC / xfer Android / Studio)
+ *   - dark & light themes (dark = xfer exact; light = same hues on warm paper),
+ *     theme persisted in HKCU\Software\3SVerse\VideoGrabber, DWM dark title bar
+ * Engine side unchanged from v1.2.0 (yt-dlp subprocess + live log + progress).
  */
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
 #include <commctrl.h>
+#include <objidl.h>
+#include <objbase.h>
 #include <shlobj.h>
 #include <shellapi.h>
 #include <stdio.h>
@@ -29,10 +38,21 @@
 #pragma comment(lib, "shell32.lib")
 #pragma comment(lib, "ole32.lib")
 
-#define APP_TITLEW  L"3SVerse VideoGrabber v1.2.0"
+/* GDI+ opaque types (flat API, declared before use) */
+typedef struct GpGraphics GpGraphics;
+typedef struct GpImage GpImage;
+typedef struct GpImageAttributes GpImageAttributes;
+
+#define APP_TITLEW  L"3SVerse VideoGrabber v1.3.0"
 #define APP_CLASSW  L"3SVerseVideoGrabber"
 #define BTN_CLASSW  L"3SVBtn"
 #define WM_APP_DONE (WM_APP + 1)
+#define APP_VER_A   L"v1.3.0"
+
+/* embedded brand art (RCDATA in src/brand.rc) */
+#define RES_LOGO    101
+#define RES_SPIRAL  102
+#define RES_ORB     103
 
 #define IDC_URL      101
 #define IDC_FMT      102
@@ -45,13 +65,13 @@
 #define IDC_THEME    110
 
 /* button styles for the 3SVBtn class */
-#define BSTYLE_PRIMARY 0   /* gradient fill, white bold text (Download) */
-#define BSTYLE_GHOST   1   /* panel fill + border (Cancel / Browse / Open) */
-#define BSTYLE_TOGGLE  2   /* ghost + top-right theme switch */
+#define BSTYLE_PRIMARY 0   /* cyan->magenta gradient, dark bold text (Download) */
+#define BSTYLE_GHOST   1   /* card fill + #232130 border (Cancel / Browse / Open) */
+#define BSTYLE_TOGGLE  2   /* ghost variant sitting on the canvas (theme switch) */
 
-#define CLIENT_W  700
-#define CLIENT_H  612
-#define HEADER_H  108
+#define CLIENT_W  720
+#define CLIENT_H  640
+#define FOOTER_H  32
 
 static const char *g_fmtArgs[] = {
     " -f \"bv*[ext=mp4]+ba[ext=m4a]/b[ext=mp4]/b\"",   /* 0: best MP4 */
@@ -61,15 +81,15 @@ static const char *g_fmtArgs[] = {
 };
 
 /* ------------------------------------------------------------------ */
-/* palette                                                             */
+/* palette — DARK values are the exact xfer / 3sverse.com brand tokens */
 /* ------------------------------------------------------------------ */
 typedef struct {
-    COLORREF bg, headerBg, txt, txtDim, txtMute;
-    COLORREF editBg, editTxt, editBorder;
-    COLORREF btnFace, btnHi, btnDn, btnTxt;
-    COLORREF accent, accent2, primTxt;
-    COLORREF progTrack, progFill;
-    COLORREF logBg, logTxt;
+    COLORREF bg, card, border, fieldBg;
+    COLORREF txt, txtDim, txtMute;
+    COLORREF cyan, mag, lime;
+    COLORREF footTxt, footVer;
+    COLORREF primTxt;
+    double   artAlpha;     /* spiral/orb opacity: .90/.95 on dark (xfer) */
 } PALETTE;
 
 static PALETTE g_pal;
@@ -77,48 +97,38 @@ static BOOL    g_dark = TRUE;
 
 static void SetDarkPalette(PALETTE *p)
 {
-    p->bg         = RGB(21, 23, 29);
-    p->headerBg   = RGB(27, 30, 38);
-    p->txt        = RGB(234, 237, 244);
-    p->txtDim     = RGB(148, 155, 170);
-    p->txtMute    = RGB(102, 108, 122);
-    p->editBg     = RGB(16, 18, 23);
-    p->editTxt    = RGB(235, 238, 245);
-    p->editBorder = RGB(58, 63, 76);
-    p->btnFace    = RGB(38, 42, 52);
-    p->btnHi      = RGB(50, 55, 67);
-    p->btnDn      = RGB(28, 32, 40);
-    p->btnTxt     = RGB(226, 230, 239);
-    p->accent     = RGB(0, 176, 240);    /* 3SVerse cyan-blue */
-    p->accent2    = RGB(124, 58, 237);   /* 3SVerse violet */
-    p->primTxt    = RGB(255, 255, 255);
-    p->progTrack  = RGB(30, 33, 41);
-    p->progFill   = RGB(0, 160, 225);
-    p->logBg      = RGB(14, 16, 21);
-    p->logTxt     = RGB(188, 194, 206);
+    p->bg      = RGB(0x07, 0x06, 0x0b);
+    p->card    = RGB(0x0d, 0x0c, 0x14);
+    p->border  = RGB(0x23, 0x21, 0x30);
+    p->fieldBg = RGB(0x12, 0x10, 0x1a);
+    p->txt     = RGB(0xf5, 0xf1, 0xe6);
+    p->txtDim  = RGB(0xb9, 0xb5, 0xcc);
+    p->txtMute = RGB(0x9b, 0x97, 0xb3);
+    p->cyan    = RGB(0x6e, 0xe7, 0xef);
+    p->mag     = RGB(0xe4, 0x4b, 0xd7);
+    p->lime    = RGB(0xc7, 0xef, 0x70);
+    p->footTxt = RGB(0xc7, 0xcb, 0xe0);
+    p->footVer = RGB(0x8b, 0x87, 0xa0);
+    p->primTxt = RGB(0x07, 0x06, 0x0b);
+    p->artAlpha = 0.90;
 }
 
 static void SetLightPalette(PALETTE *p)
 {
-    p->bg         = RGB(238, 241, 246);
-    p->headerBg   = RGB(255, 255, 255);
-    p->txt        = RGB(29, 34, 44);
-    p->txtDim     = RGB(90, 98, 112);
-    p->txtMute    = RGB(140, 147, 160);
-    p->editBg     = RGB(255, 255, 255);
-    p->editTxt    = RGB(29, 34, 44);
-    p->editBorder = RGB(201, 207, 218);
-    p->btnFace    = RGB(232, 236, 243);
-    p->btnHi      = RGB(244, 247, 251);
-    p->btnDn      = RGB(221, 227, 236);
-    p->btnTxt     = RGB(40, 46, 58);
-    p->accent     = RGB(0, 144, 216);
-    p->accent2    = RGB(109, 52, 216);
-    p->primTxt    = RGB(255, 255, 255);
-    p->progTrack  = RGB(226, 230, 238);
-    p->progFill   = RGB(0, 134, 204);
-    p->logBg      = RGB(255, 255, 255);
-    p->logTxt     = RGB(74, 81, 96);
+    p->bg      = RGB(0xf4, 0xf2, 0xec);
+    p->card    = RGB(0xff, 0xff, 0xff);
+    p->border  = RGB(0xe4, 0xdf, 0xd3);
+    p->fieldBg = RGB(0xfa, 0xf8, 0xf3);
+    p->txt     = RGB(0x2a, 0x27, 0x32);
+    p->txtDim  = RGB(0x5c, 0x58, 0x68);
+    p->txtMute = RGB(0x8b, 0x87, 0x98);
+    p->cyan    = RGB(0x0e, 0x9f, 0xb6);
+    p->mag     = RGB(0xc0, 0x2b, 0xa6);
+    p->lime    = RGB(0x6f, 0x9c, 0x12);
+    p->footTxt = RGB(0x4c, 0x48, 0x60);
+    p->footVer = RGB(0x92, 0x8e, 0x9e);
+    p->primTxt = RGB(0x07, 0x06, 0x0b);
+    p->artAlpha = 0.25;
 }
 
 static void ApplyPalette(void)
@@ -131,12 +141,20 @@ static void ApplyPalette(void)
 /* ------------------------------------------------------------------ */
 static HWND g_hUrl, g_hFmt, g_hDir, g_hLog, g_hGo, g_hCancel, g_hOpen,
             g_hBrowse, g_hTheme, g_hMain;
-static HFONT g_hFont, g_hMono, g_hFontSm, g_hFontBtn, g_hFontWord, g_hFontSub;
+static HFONT g_hFont, g_hFontBtn, g_hMono, g_hH1, g_hSub, g_hLbl, g_hChip, g_hFoot;
 static HBRUSH g_brBg, g_brEdit, g_brLog;
 static WNDPROC g_oldUrl, g_oldDir, g_oldFmt;
-static RECT g_rcHeader, g_rcProg, g_rcLog, g_rcUrlF, g_rcFmtF, g_rcDirF;
-static int  g_fmtFieldH = 30;
+static RECT g_rcCardSrc, g_rcCardOut, g_rcCardLog;
+static RECT g_rcUrlF, g_rcFmtF, g_rcDirF, g_rcLogF;
+static RECT g_rcChip, g_rcProg, g_rcFooter;
 static double g_phase = 0.0;
+static int    g_tick  = 0;
+
+/* GDI+ state */
+static ULONG_PTR         g_gdipToken = 0;
+static GpImage          *g_imgLogo = NULL, *g_imgSpiral = NULL, *g_imgOrb = NULL;
+static GpImageAttributes *g_attrDark = NULL, *g_attrLite = NULL;
+static IStream          *g_streams[3] = { NULL, NULL, NULL };
 
 /* job state */
 static PROCESS_INFORMATION g_pi;
@@ -150,6 +168,152 @@ static size_t g_pendingLen = 0, g_pendingCap = 0;
 static WCHAR *g_shown = NULL;
 static size_t g_shownLen = 0, g_shownCap = 0;
 static int    g_percent = -1;     /* -1 = unknown */
+
+/* ------------------------------------------------------------------ */
+/* GDI+ flat API (C-safe declarations; MinGW's gdiplus headers are     */
+/* C++-oriented, so only the flat C entry points are declared here)    */
+/* ------------------------------------------------------------------ */
+typedef float REAL;
+typedef int   GpStatus;      /* 0 = Ok */
+
+typedef struct {
+    UINT32 GdiplusVersion;
+    void  *DebugEventCallback;
+    BOOL   SuppressBackgroundThread;
+    BOOL   SuppressExternalCodecs;
+} GpStartupInput;
+
+#define WINGDIPAPI __stdcall
+#define GPX(a)     ((GpStatus (WINGDIPAPI*)(a)))
+
+/* enums (values from gdiplus flat headers) */
+#define GPUNIT_PIXEL        2
+#define MXORDER_PREPEND     0
+#define MXORDER_APPEND      1
+#define ITPL_HQ_BICUBIC     7
+#define COLORTYPE_DEFAULT   0
+#define CMFLAGS_DEFAULT     0
+
+typedef struct { REAL m[5][5]; } GpColorMatrix;
+
+static GpStatus (WINGDIPAPI *p_GdiplusStartup)(ULONG_PTR *, const GpStartupInput *, void *);
+static VOID      (WINGDIPAPI *p_GdiplusShutdown)(ULONG_PTR);
+static GpStatus  (WINGDIPAPI *p_GdipLoadImageFromStream)(IStream *, GpImage **);
+static GpStatus  (WINGDIPAPI *p_GdipDisposeImage)(GpImage *);
+static GpStatus  (WINGDIPAPI *p_GdipGetImageWidth)(GpImage *, UINT *);
+static GpStatus  (WINGDIPAPI *p_GdipGetImageHeight)(GpImage *, UINT *);
+static GpStatus  (WINGDIPAPI *p_GdipCreateFromHDC)(HDC, GpGraphics **);
+static GpStatus  (WINGDIPAPI *p_GdipDeleteGraphics)(GpGraphics *);
+static GpStatus  (WINGDIPAPI *p_GdipSetInterpolationMode)(GpGraphics *, int);
+static GpStatus  (WINGDIPAPI *p_GdipRotateWorldTransform)(GpGraphics *, REAL, int);
+static GpStatus  (WINGDIPAPI *p_GdipTranslateWorldTransform)(GpGraphics *, REAL, REAL, int);
+static GpStatus  (WINGDIPAPI *p_GdipResetWorldTransform)(GpGraphics *);
+static GpStatus  (WINGDIPAPI *p_GdipDrawImageRectRectI)(GpGraphics *, GpImage *,
+                     INT, INT, INT, INT, INT, INT, INT, INT, INT,
+                     const GpImageAttributes *, void *, void *);
+static GpStatus  (WINGDIPAPI *p_GdipCreateImageAttributes)(GpImageAttributes **);
+static GpStatus  (WINGDIPAPI *p_GdipDisposeImageAttributes)(GpImageAttributes *);
+static GpStatus  (WINGDIPAPI *p_GdipSetImageAttributesColorMatrix)(GpImageAttributes *,
+                     INT, BOOL, const GpColorMatrix *, const GpColorMatrix *, INT);
+
+static BOOL LoadGdiPlus(void)
+{
+    HMODULE m = LoadLibraryW(L"gdiplus.dll");
+    if (!m) return FALSE;
+#define GPGET(f) p_##f = (void *)GetProcAddress(m, #f); if (!p_##f) return FALSE
+    GPGET(GdiplusStartup);
+    GPGET(GdiplusShutdown);
+    GPGET(GdipLoadImageFromStream);
+    GPGET(GdipDisposeImage);
+    GPGET(GdipGetImageWidth);
+    GPGET(GdipGetImageHeight);
+    GPGET(GdipCreateFromHDC);
+    GPGET(GdipDeleteGraphics);
+    GPGET(GdipSetInterpolationMode);
+    GPGET(GdipRotateWorldTransform);
+    GPGET(GdipTranslateWorldTransform);
+    GPGET(GdipResetWorldTransform);
+    GPGET(GdipDrawImageRectRectI);
+    GPGET(GdipCreateImageAttributes);
+    GPGET(GdipDisposeImageAttributes);
+    GPGET(GdipSetImageAttributesColorMatrix);
+#undef GPGET
+    return TRUE;
+}
+
+/* ------------------------------------------------------------------ */
+/* brand art loading + drawing                                         */
+/* ------------------------------------------------------------------ */
+static GpImage *ImageFromResource(int resId, IStream **keep)
+{
+    HRSRC hr = FindResourceW(NULL, MAKEINTRESOURCEW(resId), (LPCWSTR)RT_RCDATA);
+    HGLOBAL res;
+    const void *p;
+    DWORD sz = 0;
+    IStream *stm = NULL;
+    GpImage *img = NULL;
+    *keep = NULL;
+    if (!hr) return NULL;
+    res = LoadResource(NULL, hr);
+    if (!res) return NULL;
+    p = LockResource(res);
+    sz = SizeofResource(NULL, hr);
+    if (!p || !sz) return NULL;
+    if (CreateStreamOnHGlobal(NULL, TRUE, &stm) != S_OK || !stm) return NULL;
+    {
+        ULONG written = 0;
+        LARGE_INTEGER zero;
+        zero.QuadPart = 0;
+        if (stm->lpVtbl->Write(stm, p, sz, &written) != S_OK || written != sz) {
+            stm->lpVtbl->Release(stm);
+            return NULL;
+        }
+        stm->lpVtbl->Seek(stm, zero, STREAM_SEEK_SET, NULL);
+        if (p_GdipLoadImageFromStream(stm, &img) != 0) {
+            stm->lpVtbl->Release(stm);
+            return NULL;
+        }
+    }
+    *keep = stm;   /* stream kept alive for the process lifetime (safety) */
+    return img;
+}
+
+static GpImageAttributes *MakeAlphaAttr(double alpha)
+{
+    GpImageAttributes *attr = NULL;
+    GpColorMatrix cm;
+    int i, j;
+    for (i = 0; i < 5; i++)
+        for (j = 0; j < 5; j++)
+            cm.m[i][j] = (i == j) ? 1.0f : 0.0f;
+    cm.m[3][3] = (REAL)alpha;
+    if (p_GdipCreateImageAttributes(&attr) != 0 || !attr) return NULL;
+    p_GdipSetImageAttributesColorMatrix(attr, COLORTYPE_DEFAULT, TRUE,
+                                        &cm, NULL, CMFLAGS_DEFAULT);
+    return attr;
+}
+
+/* draw image rotated about its center at (cx,cy), scaled into a w*h box */
+static void DrawBrandImage(HDC hdc, GpImage *img, int cx, int cy,
+                           int w, int h, double angleDeg,
+                           GpImageAttributes *attr)
+{
+    GpGraphics *g = NULL;
+    UINT iw = 0, ih = 0;
+    if (!img || p_GdipCreateFromHDC(hdc, &g) != 0 || !g) { if (g) p_GdipDeleteGraphics(g); return; }
+    p_GdipGetImageWidth(img, &iw);
+    p_GdipGetImageHeight(img, &ih);
+    if (iw && ih) {
+        p_GdipSetInterpolationMode(g, ITPL_HQ_BICUBIC);
+        p_GdipTranslateWorldTransform(g, (REAL)cx, (REAL)cy, MXORDER_APPEND);
+        p_GdipRotateWorldTransform(g, (REAL)angleDeg, MXORDER_APPEND);
+        p_GdipTranslateWorldTransform(g, (REAL)(-w / 2), (REAL)(-h / 2), MXORDER_APPEND);
+        p_GdipDrawImageRectRectI(g, img, 0, 0, w, h, 0, 0, (INT)iw, (INT)ih,
+                                 GPUNIT_PIXEL, attr, NULL, NULL);
+        p_GdipResetWorldTransform(g);
+    }
+    p_GdipDeleteGraphics(g);
+}
 
 /* ------------------------------------------------------------------ */
 /* small drawing helpers                                               */
@@ -181,7 +345,7 @@ static COLORREF Shade(COLORREF c, double f)
     }
     if (r < 0) r = 0;  if (r > 255) r = 255;
     if (g < 0) g = 0;  if (g > 255) g = 255;
-    if (b < 0) b = 0;  if (b > 255) b = 255;
+    if (b < 0) b = 0; if (b > 255) b = 255;
     return RGB(r, g, b);
 }
 
@@ -218,90 +382,6 @@ static void FillHGrad(HDC dc, RECT r, COLORREF c1, COLORREF c2, int bands)
         if (s.right <= s.left) s.right = s.left + 1;
         FillSolid(dc, s, Lerp(c1, c2, (double)(i + 0.5) / bands));
     }
-}
-
-/* vertical gradient via lerped bands */
-static void FillVGrad(HDC dc, RECT r, COLORREF c1, COLORREF c2, int bands)
-{
-    int i;
-    int h = r.bottom - r.top;
-    if (h <= 0 || bands < 1) return;
-    for (i = 0; i < bands; i++) {
-        RECT s = r;
-        s.top    = r.top + (int)((long long)h * i / bands);
-        s.bottom = r.top + (int)((long long)h * (i + 1) / bands);
-        if (s.bottom <= s.top) s.bottom = s.top + 1;
-        FillSolid(dc, s, Lerp(c1, c2, (double)(i + 0.5) / bands));
-    }
-}
-
-/* 3SVerse brand mark: archimedean spiral stroked with the brand gradient.
- * phase rotates the whole spiral so the logo slowly spins. */
-static void DrawSpiral(HDC dc, int cx, int cy, double scale, double phase,
-                       COLORREF c1, COLORREF c2)
-{
-    const int SEG = 12, PTS = 14;
-    const double TWO_PI = 6.28318530717958647692;
-    int s, i;
-    for (s = 0; s < SEG; s++) {
-        POINT pts[15];
-        HPEN p, op;
-        p = CreatePen(PS_SOLID, 2, Lerp(c1, c2, ((double)s + 0.5) / SEG));
-        op = SelectObject(dc, p);
-        for (i = 0; i <= PTS; i++) {
-            int k = s * PTS + i;
-            double t = k * (2.6 * TWO_PI) / (SEG * PTS);
-            double a = t - phase;
-            double r = 1.55 * t * scale;
-            pts[i].x = (int)(cx + r * cos(a));
-            pts[i].y = (int)(cy - r * sin(a));
-        }
-        MoveToEx(dc, pts[0].x, pts[0].y, NULL);
-        for (i = 1; i <= PTS; i++) LineTo(dc, pts[i].x, pts[i].y);
-        SelectObject(dc, op);
-        DeleteObject(p);
-    }
-}
-
-/* glowing orb: concentric discs lerping core->edge, fading into bg at rim */
-static void DrawOrb(HDC dc, int cx, int cy, int R, COLORREF core, COLORREF edge, COLORREF bgc)
-{
-    int i;
-    HPEN np = (HPEN)GetStockObject(NULL_PEN);
-    HGDIOBJ op = SelectObject(dc, np);
-    for (i = 18; i >= 1; i--) {
-        double f = i / 18.0;
-        COLORREF c;
-        int r = (int)(R * f);
-        HBRUSH b;
-        HGDIOBJ ob;
-        if (f > 0.62) c = Lerp(edge, bgc, (f - 0.62) / 0.38);
-        else          c = Lerp(core, edge, f / 0.62);
-        b = CreateSolidBrush(c);
-        ob = SelectObject(dc, b);
-        Ellipse(dc, cx - r, cy - r, cx + r, cy + r);
-        SelectObject(dc, ob);
-        DeleteObject(b);
-    }
-    SelectObject(dc, op);
-}
-
-/* soft glow rings (fake alpha via lerped solid discs) */
-static void DrawGlow(HDC dc, int cx, int cy, int R, COLORREF glow, COLORREF bgc)
-{
-    int i;
-    HPEN np = (HPEN)GetStockObject(NULL_PEN);
-    HGDIOBJ op = SelectObject(dc, np);
-    for (i = 6; i >= 1; i--) {
-        int r = R * i / 6;
-        COLORREF c = Lerp(glow, bgc, 0.82);
-        HBRUSH b = CreateSolidBrush(c);
-        HGDIOBJ ob = SelectObject(dc, b);
-        Ellipse(dc, cx - r, cy - r, cx + r, cy + r);
-        SelectObject(dc, ob);
-        DeleteObject(b);
-    }
-    SelectObject(dc, op);
 }
 
 /* ------------------------------------------------------------------ */
@@ -349,7 +429,7 @@ static void ApplyDwm(HWND w)
     f(w, 20, &dark, sizeof(dark));   /* DWMWA_USE_IMMERSIVE_DARK_MODE */
     f(w, 19, &dark, sizeof(dark));   /* older builds */
     f(w, 33, &pref, sizeof(pref));   /* DWMWA_WINDOW_CORNER_PREFERENCE */
-    cap = g_pal.headerBg;            /* Win11: caption matches the header */
+    cap = g_pal.bg;                  /* Win11: caption matches the canvas */
     f(w, 35, &cap, sizeof(cap));
 }
 
@@ -359,8 +439,8 @@ static void RebuildBrushes(void)
     if (g_brEdit) DeleteObject(g_brEdit);
     if (g_brLog)  DeleteObject(g_brLog);
     g_brBg   = CreateSolidBrush(g_pal.bg);
-    g_brEdit = CreateSolidBrush(g_pal.editBg);
-    g_brLog  = CreateSolidBrush(g_pal.logBg);
+    g_brEdit = CreateSolidBrush(g_pal.fieldBg);
+    g_brLog  = CreateSolidBrush(g_pal.fieldBg);
 }
 
 /* ------------------------------------------------------------------ */
@@ -625,6 +705,7 @@ static void StartDownload(HWND hwnd)
         InterlockedExchange(&g_running, 1);
         SetButtons(TRUE);
         InvalidateRect(hwnd, &g_rcProg, FALSE);
+        InvalidateRect(hwnd, &g_rcChip, FALSE);
 
         {
             HANDLE t = CreateThread(NULL, 0, JobThread, (LPVOID)cmd, 0, NULL);
@@ -669,9 +750,9 @@ static void OpenFolder(void)
 }
 
 /* ------------------------------------------------------------------ */
-/* 3SVBtn — custom self-painting button class.                         */
-/* No BS_OWNERDRAW / WM_DRAWITEM dependency: the button paints itself, */
-/* so it can never render as a blank box (v1.1.0 regression root fix). */
+/* 3SVBtn — custom self-painting button class (v1.2.0 pattern kept:    */
+/* no BS_OWNERDRAW dependency, blank-out impossible).                  */
+/* Restyled to the xfer tokens: gradient CTA + ghost cards.            */
 /* ------------------------------------------------------------------ */
 typedef struct {
     int  style;        /* BSTYLE_PRIMARY / BSTYLE_GHOST / BSTYLE_TOGGLE */
@@ -686,53 +767,52 @@ static void BtnPaint(HWND h, BTNSTATE *st)
     RECT r, rt;
     HDC dc;
     WCHAR t[64];
-    COLORREF fill, txtc, out;
-    int id = GetDlgCtrlID(h);
-    int bands = 20;
+    COLORREF txtc, fill, out;
+    int bands = 24;
 
     dc = BeginPaint(h, &ps);
     GetClientRect(h, &r);
     rt = r;
 
     GetWindowTextW(h, t, 64);
-    txtc = g_pal.btnTxt;
-    fill = g_pal.btnFace;
-    out  = g_pal.editBorder;
+    txtc = g_pal.txtDim;
+    fill = g_pal.card;
+    out  = g_pal.border;
 
     if (!IsWindowEnabled(h)) {
-        FillRound(dc, r, 8, g_pal.btnFace, g_pal.editBorder);
+        FillRound(dc, r, 11, (st->style == BSTYLE_TOGGLE) ? g_pal.bg : g_pal.card, g_pal.border);
         txtc = g_pal.txtMute;
         bands = 1;
-        fill = g_pal.btnFace;
     } else if (st->style == BSTYLE_PRIMARY) {
-        COLORREF a = st->down ? Shade(g_pal.accent, 0.82) :
-                     (st->hover ? Shade(g_pal.accent, 1.10) : g_pal.accent);
-        COLORREF b = st->down ? Shade(g_pal.accent2, 0.82) :
-                     (st->hover ? Shade(g_pal.accent2, 1.10) : g_pal.accent2);
+        COLORREF a = st->down ? Shade(g_pal.cyan, 0.86) :
+                     (st->hover ? Shade(g_pal.cyan, 1.12) : g_pal.cyan);
+        COLORREF b = st->down ? Shade(g_pal.mag, 0.86) :
+                     (st->hover ? Shade(g_pal.mag, 1.12) : g_pal.mag);
         {
             /* clip the gradient to the rounded shape (no square corners) */
-            HRGN rg = CreateRoundRectRgn(r.left, r.top, r.right, r.bottom, 16, 16);
+            HRGN rg = CreateRoundRectRgn(r.left, r.top, r.right, r.bottom, 22, 22);
             SelectClipRgn(dc, rg);
             FillHGrad(dc, r, a, b, bands);
             SelectClipRgn(dc, NULL);
             DeleteObject(rg);
         }
         {
-            HPEN p = CreatePen(PS_SOLID, 1, Shade(b, 0.7));
+            HPEN p = CreatePen(PS_SOLID, 1, Shade(b, 0.72));
             HGDIOBJ op = SelectObject(dc, p);
             HBRUSH nb = (HBRUSH)GetStockObject(NULL_BRUSH);
             HGDIOBJ ob = SelectObject(dc, nb);
-            RoundRect(dc, r.left, r.top, r.right, r.bottom, 16, 16);
+            RoundRect(dc, r.left, r.top, r.right, r.bottom, 22, 22);
             SelectObject(dc, ob);
             SelectObject(dc, op);
             DeleteObject(p);
         }
         txtc = g_pal.primTxt;
     } else { /* ghost + toggle */
-        if (st->down)      { fill = g_pal.btnDn; }
-        else if (st->hover){ fill = g_pal.btnHi; out = Lerp(g_pal.editBorder, g_pal.accent, 0.55); }
-        else               { fill = g_pal.btnFace; }
-        FillRound(dc, r, 8, fill, out);
+        COLORREF fillc = (st->style == BSTYLE_TOGGLE) ? g_pal.bg : g_pal.card;
+        if (st->down)      { fill = g_pal.fieldBg; }
+        else if (st->hover){ fill = fillc; out = g_pal.cyan; txtc = g_pal.cyan; }
+        else               { fill = fillc; }
+        FillRound(dc, r, 11, fill, out);
     }
 
     SetBkMode(dc, TRANSPARENT);
@@ -740,14 +820,6 @@ static void BtnPaint(HWND h, BTNSTATE *st)
     SetTextColor(dc, txtc);
     DrawTextW(dc, t, -1, &rt, DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
 
-    /* subtle bottom edge on ghost buttons */
-    if (st->style != BSTYLE_PRIMARY && IsWindowEnabled(h)) {
-        RECT e = r;
-        e.bottom -= 1; e.top = e.bottom - 1;
-        e.left += 6; e.right -= 6;
-        FillSolid(dc, e, Lerp(fill, g_pal.bg, 0.55));
-    }
-    (void)id;
     EndPaint(h, &ps);
 }
 
@@ -829,7 +901,7 @@ static LRESULT CALLBACK FieldSubProc(HWND h, UINT m, WPARAM w, LPARAM l)
         RECT r;
         HBRUSH b;
         GetClientRect(h, &r);
-        b = CreateSolidBrush(g_pal.editBg);
+        b = CreateSolidBrush(g_pal.fieldBg);
         FillRect(dc, &r, b);
         DeleteObject(b);
         return 1;
@@ -842,7 +914,7 @@ static LRESULT CALLBACK FieldSubProc(HWND h, UINT m, WPARAM w, LPARAM l)
 }
 
 /* ------------------------------------------------------------------ */
-/* painting                                                            */
+/* painting — xfer Studio layout                                       */
 /* ------------------------------------------------------------------ */
 static void DrawFrameRect(HDC dc, RECT r, COLORREF col, int w)
 {
@@ -850,92 +922,144 @@ static void DrawFrameRect(HDC dc, RECT r, COLORREF col, int w)
     HGDIOBJ op = SelectObject(dc, p);
     HBRUSH nb = (HBRUSH)GetStockObject(NULL_BRUSH);
     HGDIOBJ ob = SelectObject(dc, nb);
-    RoundRect(dc, r.left, r.top, r.right, r.bottom, 10, 10);
+    RoundRect(dc, r.left, r.top, r.right, r.bottom, 20, 20);
     SelectObject(dc, ob);
     SelectObject(dc, op);
     DeleteObject(p);
 }
 
+static void PaintTextMono(HDC dc, const WCHAR *s, RECT r, HFONT f,
+                          COLORREF c, int extra, UINT align)
+{
+    HGDIOBJ of = SelectObject(dc, f);
+    SetTextColor(dc, c);
+    SetTextCharacterExtra(dc, extra);
+    DrawTextW(dc, s, -1, &r, align | DT_SINGLELINE | DT_VCENTER);
+    SetTextCharacterExtra(dc, 0);
+    SelectObject(dc, of);
+}
+
+/* status chip: pill with the lime (ready) / cyan (busy) dot, xfer .chip */
+static void PaintChip(HDC dc)
+{
+    RECT r = g_rcChip;
+    int cy = (r.top + r.bottom) / 2;
+    double pulse = 0.5 + 0.5 * sin(g_phase * 2.6);
+    COLORREF dotc;
+
+    FillRound(dc, r, 13, g_pal.card, g_pal.border);
+
+    if (g_running) {
+        dotc = Lerp(Shade(g_pal.cyan, 0.45), g_pal.cyan, pulse);
+        if (g_percent >= 0) {
+            WCHAR t[48];
+            wsprintfW(t, L"DOWNLOADING \x2022 %d%%", g_percent);
+            PaintTextMono(dc, t, (RECT){ r.left + 30, r.top, r.right - 14, r.bottom },
+                          g_hChip, g_pal.txtDim, 1, DT_LEFT);
+        } else {
+            PaintTextMono(dc, L"DOWNLOADING \x2022 SEE PROGRESS BELOW",
+                          (RECT){ r.left + 30, r.top, r.right - 14, r.bottom },
+                          g_hChip, g_pal.txtDim, 1, DT_LEFT);
+        }
+    } else {
+        dotc = g_pal.lime;
+        PaintTextMono(dc, L"READY \x2022 PASTE A LINK TO START",
+                      (RECT){ r.left + 30, r.top, r.right - 14, r.bottom },
+                      g_hChip, g_pal.txtDim, 1, DT_LEFT);
+    }
+    {
+        HBRUSH b = CreateSolidBrush(dotc);
+        HGDIOBJ ob = SelectObject(dc, b);
+        HPEN np = (HPEN)GetStockObject(NULL_PEN);
+        HGDIOBJ op = SelectObject(dc, np);
+        Ellipse(dc, r.left + 18, cy - 4, r.left + 26, cy + 4);
+        SelectObject(dc, ob);
+        SelectObject(dc, op);
+        DeleteObject(b);
+    }
+}
+
+/* stacked header: wordmark + mono title with cyan highlight + eyebrow */
 static void PaintHeader(HDC dc)
 {
-    RECT rc = g_rcHeader;
-    int cy = HEADER_H / 2;
-    int fadeX;
-
-    FillVGrad(dc, rc, g_pal.headerBg, Lerp(g_pal.headerBg, g_pal.bg, 0.6), 16);
-
-    /* ambient brand glow behind the logo */
-    DrawGlow(dc, 46, cy, 46, g_pal.accent2, g_pal.headerBg);
-    DrawGlow(dc, 46, cy, 30, g_pal.accent, g_pal.headerBg);
-
-    /* rotating gradient spiral + pulsing core orb */
-    DrawOrb(dc, 46, cy, (int)(5.5 + 1.4 * sin(g_phase * 1.6)),
-            Lerp(g_pal.accent, RGB(255, 255, 255), 0.72),
-            g_pal.accent, g_pal.headerBg);
-    DrawSpiral(dc, 46, cy, 0.50, g_phase, g_pal.accent, g_pal.accent2);
-
-    /* wordmark */
     SetBkMode(dc, TRANSPARENT);
-    SelectObject(dc, g_hFontWord);
-    SetTextColor(dc, g_pal.txt);
-    SetTextCharacterExtra(dc, 2);
     {
-        RECT rw = { 84, 22, 400, 58 };
-        DrawTextW(dc, L"3SVERSE", -1, &rw, DT_LEFT | DT_SINGLELINE | DT_VCENTER);
-    }
-    SelectObject(dc, g_hFontSub);
-    SetTextColor(dc, g_pal.txtDim);
-    SetTextCharacterExtra(dc, 6);
-    {
-        RECT rs = { 86, 57, 400, 76 };
-        DrawTextW(dc, L"VIDEOGRABBER", -1, &rs, DT_LEFT | DT_SINGLELINE | DT_VCENTER);
-    }
-    SetTextCharacterExtra(dc, 0);
-
-    /* brand gradient bar */
-    {
-        RECT gb = { 86, 82, 266, 85 };
-        FillHGrad(dc, gb, g_pal.accent, g_pal.accent2, 24);
-    }
-
-    /* separator + gradient accent line fading to the right */
-    {
-        RECT sep = { 0, HEADER_H - 1, CLIENT_W, HEADER_H };
-        FillSolid(dc, sep, Lerp(g_pal.headerBg, g_pal.editBorder, 0.85));
-        fadeX = (int)(CLIENT_W * 0.68);
-        {
-            RECT g1 = { 0, HEADER_H - 3, fadeX, HEADER_H - 1 };
-            RECT g2 = { fadeX, HEADER_H - 3, CLIENT_W, HEADER_H - 1 };
-            FillHGrad(dc, g1, g_pal.accent, g_pal.accent2, 26);
-            FillHGrad(dc, g2, g_pal.accent2, g_pal.headerBg, 12);
+        UINT lw = 0, lh = 0;
+        int logoH = 58, logoW = 190;
+        if (g_imgLogo) {
+            p_GdipGetImageWidth(g_imgLogo, &lw);
+            p_GdipGetImageHeight(g_imgLogo, &lh);
+            if (lw && lh) logoW = (int)((double)lh ? logoH * lw / lh : logoW);
+        }
+        if (g_imgLogo)
+            DrawBrandImage(dc, g_imgLogo, CLIENT_W / 2, 10 + logoH / 2,
+                           logoW, logoH, 0.0, NULL);
+        else {
+            SetBkMode(dc, TRANSPARENT);
+            PaintTextMono(dc, L"3SVERSE",
+                          (RECT){ 0, 18, CLIENT_W, 44 }, g_hH1, g_pal.txt, 3,
+                          DT_CENTER | DT_NOPREFIX);
         }
     }
-}
-
-static void PaintBodyLabels(HDC dc)
-{
     SetBkMode(dc, TRANSPARENT);
-    SelectObject(dc, g_hFont);
-    SetTextColor(dc, g_pal.txtDim);
+
+    /* title: "3SVERSE " + "VIDEOGRABBER" (cyan), centered as one string */
     {
-        RECT r1 = { 16, 124, 420, 142 };
-        RECT r2 = { 16, 190, 90, 208 };
-        RECT r3 = { 16, 236, 90, 254 };
-        DrawTextW(dc, L"Video / audio URL:", -1, &r1, DT_LEFT | DT_SINGLELINE | DT_VCENTER);
-        DrawTextW(dc, L"Format:",            -1, &r2, DT_LEFT | DT_SINGLELINE | DT_VCENTER);
-        DrawTextW(dc, L"Save to:",           -1, &r3, DT_LEFT | DT_SINGLELINE | DT_VCENTER);
+        const WCHAR *p1 = L"3SVERSE ";
+        const WCHAR *p2 = L"VIDEOGRABBER";
+        SIZE s1, s2;
+        int x0, extra = 3;
+        HDC tdc = dc;
+        HGDIOBJ of = SelectObject(tdc, g_hH1);
+        GetTextExtentPoint32W(tdc, p1, (int)wcslen(p1), &s1);
+        GetTextExtentPoint32W(tdc, p2, (int)wcslen(p2), &s2);
+        SelectObject(tdc, of);
+        s2.cx += extra * (int)wcslen(p2);
+        s1.cx += extra * (int)wcslen(p1);
+        x0 = (CLIENT_W - (s1.cx + s2.cx)) / 2;
+        PaintTextMono(dc, p1, (RECT){ x0, 74, x0 + s1.cx + 4, 92 },
+                      g_hH1, g_pal.txt, extra, DT_LEFT | DT_NOPREFIX);
+        PaintTextMono(dc, p2, (RECT){ x0 + s1.cx, 74, x0 + s1.cx + s2.cx + 8, 92 },
+                      g_hH1, g_pal.cyan, extra, DT_LEFT | DT_NOPREFIX);
     }
+
+    /* eyebrow line (xfer .sub): tiny cyan mono, letter-spaced */
+    PaintTextMono(dc, L"PC DOWNLOADER \x2022 YT-DLP ENGINE \x2022 100% LOCAL \x2022 NO CLOUD",
+                  (RECT){ 0, 96, CLIENT_W, 112 },
+                  g_hSub, g_pal.cyan, 3, DT_CENTER | DT_NOPREFIX);
 }
 
-static void PaintBodyFrames(HDC dc)
+static void PaintCards(HDC dc)
 {
-    COLORREF fr = g_pal.editBorder;
-    COLORREF frHi = g_pal.accent;
+    /* three brand cards (bg #0d0c14, border #232130, radius 14) */
+    FillRound(dc, g_rcCardSrc, 14, g_pal.card, g_pal.border);
+    FillRound(dc, g_rcCardOut, 14, g_pal.card, g_pal.border);
+    FillRound(dc, g_rcCardLog, 14, g_pal.card, g_pal.border);
+
+    SetBkMode(dc, TRANSPARENT);
+    PaintTextMono(dc, L"VIDEO / AUDIO URL",
+                  (RECT){ 40, 164, 400, 180 }, g_hLbl, g_pal.txtMute, 1,
+                  DT_LEFT | DT_NOPREFIX);
+    PaintTextMono(dc, L"FORMAT",
+                  (RECT){ 40, 250, 300, 264 }, g_hLbl, g_pal.txtMute, 1,
+                  DT_LEFT | DT_NOPREFIX);
+    PaintTextMono(dc, L"SAVE FOLDER",
+                  (RECT){ 40, 304, 300, 318 }, g_hLbl, g_pal.txtMute, 1,
+                  DT_LEFT | DT_NOPREFIX);
+    PaintTextMono(dc, L"ACTIVITY LOG",
+                  (RECT){ 40, 474, 300, 490 }, g_hSub, g_pal.cyan, 2,
+                  DT_LEFT | DT_NOPREFIX);
+}
+
+static void PaintFrames(HDC dc)
+{
+    COLORREF fr = g_pal.border;
+    COLORREF frHi = g_pal.cyan;
 
     DrawFrameRect(dc, g_rcUrlF, (GetFocus() == g_hUrl) ? frHi : fr, (GetFocus() == g_hUrl) ? 2 : 1);
     DrawFrameRect(dc, g_rcFmtF, (GetFocus() == g_hFmt) ? frHi : fr, (GetFocus() == g_hFmt) ? 2 : 1);
     DrawFrameRect(dc, g_rcDirF, (GetFocus() == g_hDir) ? frHi : fr, (GetFocus() == g_hDir) ? 2 : 1);
-    DrawFrameRect(dc, g_rcLog,  (GetFocus() == g_hLog) ? frHi : fr, (GetFocus() == g_hLog) ? 2 : 1);
+    DrawFrameRect(dc, g_rcLogF, (GetFocus() == g_hLog) ? frHi : fr, (GetFocus() == g_hLog) ? 2 : 1);
 }
 
 static void PaintProgress(HDC dc)
@@ -945,7 +1069,7 @@ static void PaintProgress(HDC dc)
     WCHAR t[64];
     HGDIOBJ of;
 
-    FillRound(dc, r, 8, g_pal.progTrack, g_pal.editBorder);
+    FillRound(dc, r, 8, g_pal.fieldBg, g_pal.border);
     if (pct > 100) pct = 100;
     if (pct >= 0 && g_running) {
         int w = (r.right - r.left - 6) * pct / 100;
@@ -954,9 +1078,9 @@ static void PaintProgress(HDC dc)
             HRGN rg;
             f.left = r.left + 3; f.right = r.left + 3 + w;
             f.top = r.top + 3;   f.bottom = r.bottom - 3;
-            rg = CreateRoundRectRgn(f.left, f.top, f.right, f.bottom, 6, 6);
+            rg = CreateRoundRectRgn(f.left, f.top, f.right, f.bottom, 10, 10);
             SelectClipRgn(dc, rg);
-            FillHGrad(dc, f, g_pal.accent, g_pal.accent2, 24);
+            FillHGrad(dc, f, g_pal.cyan, g_pal.mag, 28);
             SelectClipRgn(dc, NULL);
             DeleteObject(rg);
         }
@@ -968,25 +1092,26 @@ static void PaintProgress(HDC dc)
         lstrcpynW(t, L"Ready", 64);
     }
     SetBkMode(dc, TRANSPARENT);
-    of = SelectObject(dc, g_hFontSm);
-    SetTextColor(dc, (g_running && pct > 0) ? RGB(255, 255, 255) : g_pal.txtDim);
+    of = SelectObject(dc, g_hLbl);
+    SetTextColor(dc, (g_running && pct > 0) ? g_pal.txt : g_pal.txtMute);
     DrawTextW(dc, t, -1, &r, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
     SelectObject(dc, of);
 }
 
+/* the standard fixed 3SVerse footer strip (xfer PC / xfer Android / Studio) */
 static void PaintFooter(HDC dc)
 {
-    RECT r1, r2;
-    SetBkMode(dc, TRANSPARENT);
-    SelectObject(dc, g_hFontSm);
-    SetTextColor(dc, g_pal.txtMute);
-    r1.left = 16;  r1.top = CLIENT_H - 30; r1.right = 520;     r1.bottom = CLIENT_H - 8;
-    r2.left = 520; r2.top = CLIENT_H - 30; r2.right = CLIENT_W - 16; r2.bottom = CLIENT_H - 8;
-    DrawTextW(dc,
-        L"Powered by the yt-dlp engine - runs 100% locally - MIT License",
-        -1, &r1, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
-    SetTextColor(dc, Lerp(g_pal.accent, g_pal.txtDim, 0.25));
-    DrawTextW(dc, L"3SVerse - 3sverse.com", -1, &r2, DT_RIGHT | DT_VCENTER | DT_SINGLELINE);
+    FillSolid(dc, g_rcFooter, g_pal.card);
+    {
+        RECT b = { 0, g_rcFooter.top, CLIENT_W, g_rcFooter.top + 1 };
+        FillSolid(dc, b, g_pal.border);
+    }
+    PaintTextMono(dc, L"DEVELOPED BY WWW.3SVERSE.COM",
+                  (RECT){ 0, g_rcFooter.top, CLIENT_W, g_rcFooter.bottom },
+                  g_hFoot, g_pal.footTxt, 1, DT_CENTER | DT_NOPREFIX);
+    PaintTextMono(dc, APP_VER_A,
+                  (RECT){ CLIENT_W - 90, g_rcFooter.top, CLIENT_W - 10, g_rcFooter.bottom },
+                  g_hFoot, g_pal.footVer, 0, DT_RIGHT | DT_NOPREFIX);
 }
 
 static void OnPaint(HWND hwnd)
@@ -1001,19 +1126,30 @@ static void OnPaint(HWND hwnd)
         HBITMAP bmp = CreateCompatibleBitmap(dc, rc.right, rc.bottom);
         HGDIOBJ ob = SelectObject(mem, bmp);
 
-        /* canvas + ambient tint glows (fake alpha, pure GDI) */
+        /* near-black canvas (xfer #07060b) */
         FillSolid(mem, rc, g_pal.bg);
-        DrawGlow(mem, CLIENT_W + 60, CLIENT_H + 60, 300, g_pal.accent2, g_pal.bg);
-        DrawGlow(mem, -40, CLIENT_H + 90, 230, g_pal.accent, g_pal.bg);
 
-        /* faint rotating brand watermark spiral, bottom-right */
-        DrawSpiral(mem, CLIENT_W - 130, CLIENT_H - 60, 2.1, 0.9,
-                   Lerp(g_pal.bg, g_pal.accent, 0.10),
-                   Lerp(g_pal.bg, g_pal.accent2, 0.10));
+        /* the xfer background art: hero ring spiral top-right (120s/turn +
+         * 16px/12s float), glossy orb bottom-left (140s/turn + 13s float) */
+        if (g_imgSpiral) {
+            double ang = g_tick * 0.135;                        /* 3 deg/s = 120s/turn */
+            double dy  = 16.0 * sin(g_tick * (2.0 * 3.14159265358979) / 266.7);
+            DrawBrandImage(mem, g_imgSpiral, CLIENT_W - 14, 42 + (int)dy,
+                           338, 350, ang,
+                           g_dark ? g_attrDark : g_attrLite);
+        }
+        if (g_imgOrb) {
+            double ang2 = g_tick * 0.1157;                      /* 140s/turn */
+            double dy2  = 12.0 * sin(g_tick * (2.0 * 3.14159265358979) / 288.9);
+            DrawBrandImage(mem, g_imgOrb, 26, CLIENT_H - 44 + (int)dy2,
+                           300, 300, ang2,
+                           g_dark ? g_attrDark : g_attrLite);
+        }
 
         PaintHeader(mem);
-        PaintBodyLabels(mem);
-        PaintBodyFrames(mem);
+        PaintChip(mem);
+        PaintCards(mem);
+        PaintFrames(mem);
         PaintProgress(mem);
         PaintFooter(mem);
 
@@ -1035,70 +1171,88 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
         HINSTANCE h = ((LPCREATESTRUCTW)lp)->hInstance;
         int itemH;
 
-        g_rcHeader.left = 0; g_rcHeader.top = 0;
-        g_rcHeader.right = CLIENT_W; g_rcHeader.bottom = HEADER_H;
+        /* cards + fields + frames + chip + footer geometry */
+        g_rcCardSrc.left = 24; g_rcCardSrc.top = 156; g_rcCardSrc.right = 696; g_rcCardSrc.bottom = 234;
+        g_rcCardOut.left = 24; g_rcCardOut.top = 244; g_rcCardOut.right = 696; g_rcCardOut.bottom = 364;
+        g_rcCardLog.left = 24; g_rcCardLog.top = 468; g_rcCardLog.right = 696; g_rcCardLog.bottom = 606;
 
-        g_hFont     = CreateFontW(-15, 0, 0, 0, FW_NORMAL, 0, 0, 0, DEFAULT_CHARSET,
-                                  OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY,
-                                  DEFAULT_PITCH | FF_DONTCARE, L"Segoe UI");
-        g_hFontBtn  = CreateFontW(-15, 0, 0, 0, FW_SEMIBOLD, 0, 0, 0, DEFAULT_CHARSET,
-                                  OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY,
-                                  DEFAULT_PITCH | FF_DONTCARE, L"Segoe UI");
-        g_hMono     = CreateFontW(-13, 0, 0, 0, FW_NORMAL, 0, 0, 0, DEFAULT_CHARSET,
-                                  OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY,
-                                  FIXED_PITCH | FF_MODERN, L"Consolas");
-        g_hFontSm   = CreateFontW(-11, 0, 0, 0, FW_NORMAL, 0, 0, 0, DEFAULT_CHARSET,
-                                  OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY,
-                                  DEFAULT_PITCH | FF_DONTCARE, L"Segoe UI");
-        g_hFontWord = CreateFontW(-26, 0, 0, 0, FW_HEAVY, 0, 0, 0, DEFAULT_CHARSET,
-                                  OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY,
-                                  DEFAULT_PITCH | FF_DONTCARE, L"Segoe UI");
-        g_hFontSub  = CreateFontW(-10, 0, 0, 0, FW_SEMIBOLD, 0, 0, 0, DEFAULT_CHARSET,
-                                  OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY,
-                                  DEFAULT_PITCH | FF_DONTCARE, L"Segoe UI");
+        g_rcUrlF.left = 38;  g_rcUrlF.top = 194; g_rcUrlF.right = 682; g_rcUrlF.bottom = 230;
+        g_rcFmtF.left = 38;  g_rcFmtF.top = 268; g_rcFmtF.right = 372; g_rcFmtF.bottom = 300;
+        g_rcDirF.left = 38;  g_rcDirF.top = 322; g_rcDirF.right = 542; g_rcDirF.bottom = 356;
+        g_rcLogF.left = 38;  g_rcLogF.top = 494; g_rcLogF.right = 682; g_rcLogF.bottom = 594;
 
-        /* URL row */
+        g_rcChip.left = 170; g_rcChip.top = 120; g_rcChip.right = 550; g_rcChip.bottom = 146;
+        g_rcProg.left = 24;  g_rcProg.top = 432; g_rcProg.right = 696; g_rcProg.bottom = 456;
+        g_rcFooter.left = 0; g_rcFooter.top = CLIENT_H - FOOTER_H;
+        g_rcFooter.right = CLIENT_W; g_rcFooter.bottom = CLIENT_H;
+
+        g_hFont    = CreateFontW(-15, 0, 0, 0, FW_NORMAL, 0, 0, 0, DEFAULT_CHARSET,
+                                 OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY,
+                                 DEFAULT_PITCH | FF_DONTCARE, L"Segoe UI");
+        g_hFontBtn = CreateFontW(-15, 0, 0, 0, FW_SEMIBOLD, 0, 0, 0, DEFAULT_CHARSET,
+                                 OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY,
+                                 DEFAULT_PITCH | FF_DONTCARE, L"Segoe UI");
+        g_hMono    = CreateFontW(-12, 0, 0, 0, FW_NORMAL, 0, 0, 0, DEFAULT_CHARSET,
+                                 OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY,
+                                 FIXED_PITCH | FF_MODERN, L"Consolas");
+        g_hH1      = CreateFontW(-15, 0, 0, 0, FW_BOLD, 0, 0, 0, DEFAULT_CHARSET,
+                                 OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY,
+                                 FIXED_PITCH | FF_MODERN, L"Consolas");
+        g_hSub     = CreateFontW(-10, 0, 0, 0, FW_NORMAL, 0, 0, 0, DEFAULT_CHARSET,
+                                 OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY,
+                                 FIXED_PITCH | FF_MODERN, L"Consolas");
+        g_hLbl     = CreateFontW(-9, 0, 0, 0, FW_NORMAL, 0, 0, 0, DEFAULT_CHARSET,
+                                 OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY,
+                                 FIXED_PITCH | FF_MODERN, L"Consolas");
+        g_hChip    = CreateFontW(-10, 0, 0, 0, FW_NORMAL, 0, 0, 0, DEFAULT_CHARSET,
+                                 OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY,
+                                 FIXED_PITCH | FF_MODERN, L"Consolas");
+        g_hFoot    = CreateFontW(-9, 0, 0, 0, FW_BOLD, 0, 0, 0, DEFAULT_CHARSET,
+                                 OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY,
+                                 FIXED_PITCH | FF_MODERN, L"Consolas");
+
+        /* URL row (inside SOURCE card) */
         g_hUrl = CreateWindowW(L"EDIT", L"",
             WS_CHILD | WS_VISIBLE | WS_TABSTOP | ES_AUTOHSCROLL,
-            14, 146, 672, 30, hwnd, (HMENU)IDC_URL, h, NULL);
+            40, 196, 640, 32, hwnd, (HMENU)IDC_URL, h, NULL);
 
-        /* Format row */
+        /* Format row (inside OUTPUT card) */
         g_hFmt = CreateWindowW(L"COMBOBOX", L"",
             WS_CHILD | WS_VISIBLE | CBS_DROPDOWNLIST | WS_VSCROLL | WS_TABSTOP,
-            90, 186, 320, 200, hwnd, (HMENU)IDC_FMT, h, NULL);
+            40, 270, 330, 200, hwnd, (HMENU)IDC_FMT, h, NULL);
         SendMessageW(g_hFmt, CB_ADDSTRING, 0, (LPARAM)L"Best MP4 (recommended)");
         SendMessageW(g_hFmt, CB_ADDSTRING, 0, (LPARAM)L"Best quality (any format)");
         SendMessageW(g_hFmt, CB_ADDSTRING, 0, (LPARAM)L"Audio only - M4A");
         SendMessageW(g_hFmt, CB_ADDSTRING, 0, (LPARAM)L"Audio only - MP3 (needs ffmpeg.exe)");
         SendMessageW(g_hFmt, CB_SETCURSEL, 0, 0);
 
-        /* Save-to row */
+        /* Save-to row (inside OUTPUT card) */
         g_hDir = CreateWindowW(L"EDIT", L"",
             WS_CHILD | WS_VISIBLE | WS_TABSTOP | ES_AUTOHSCROLL,
-            90, 232, 470, 30, hwnd, (HMENU)IDC_DIR, h, NULL);
+            40, 324, 500, 30, hwnd, (HMENU)IDC_DIR, h, NULL);
 
         /* action buttons (custom class — self-painting) */
         g_hGo = CreateWindowW(BTN_CLASSW, L"Download",
             WS_CHILD | WS_VISIBLE | WS_TABSTOP,
-            14, 280, 190, 44, hwnd, (HMENU)IDC_GO, h, (LPVOID)(INT_PTR)BSTYLE_PRIMARY);
+            24, 376, 200, 44, hwnd, (HMENU)IDC_GO, h, (LPVOID)(INT_PTR)BSTYLE_PRIMARY);
         g_hCancel = CreateWindowW(BTN_CLASSW, L"Cancel",
             WS_CHILD | WS_VISIBLE | WS_TABSTOP,
-            214, 280, 104, 44, hwnd, (HMENU)IDC_CANCEL, h, (LPVOID)(INT_PTR)BSTYLE_GHOST);
+            236, 376, 110, 44, hwnd, (HMENU)IDC_CANCEL, h, (LPVOID)(INT_PTR)BSTYLE_GHOST);
         g_hOpen = CreateWindowW(BTN_CLASSW, L"Open folder",
             WS_CHILD | WS_VISIBLE | WS_TABSTOP,
-            328, 280, 150, 44, hwnd, (HMENU)IDC_OPEN, h, (LPVOID)(INT_PTR)BSTYLE_GHOST);
+            358, 376, 160, 44, hwnd, (HMENU)IDC_OPEN, h, (LPVOID)(INT_PTR)BSTYLE_GHOST);
         g_hBrowse = CreateWindowW(BTN_CLASSW, L"Browse...",
             WS_CHILD | WS_VISIBLE | WS_TABSTOP,
-            572, 230, 114, 34, hwnd, (HMENU)IDC_BROWSE, h, (LPVOID)(INT_PTR)BSTYLE_GHOST);
+            550, 322, 114, 34, hwnd, (HMENU)IDC_BROWSE, h, (LPVOID)(INT_PTR)BSTYLE_GHOST);
         g_hTheme = CreateWindowW(BTN_CLASSW, g_dark ? L"Light mode" : L"Dark mode",
             WS_CHILD | WS_VISIBLE | WS_TABSTOP,
-            566, 26, 120, 34, hwnd, (HMENU)IDC_THEME, h, (LPVOID)(INT_PTR)BSTYLE_TOGGLE);
+            20, 16, 118, 30, hwnd, (HMENU)IDC_THEME, h, (LPVOID)(INT_PTR)BSTYLE_TOGGLE);
 
-        /* log console */
+        /* log console (inside ACTIVITY LOG card) */
         g_hLog = CreateWindowW(L"EDIT", L"",
             WS_CHILD | WS_VISIBLE | WS_VSCROLL | WS_HSCROLL | WS_TABSTOP |
             ES_MULTILINE | ES_READONLY | ES_AUTOVSCROLL,
-            14, 382, 672, 192, hwnd, (HMENU)IDC_LOG, h, NULL);
+            40, 496, 640, 96, hwnd, (HMENU)IDC_LOG, h, NULL);
 
         /* fonts onto controls */
         SendMessageW(g_hUrl, WM_SETFONT, (WPARAM)g_hFont, TRUE);
@@ -1112,17 +1266,10 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
         SendMessageW(g_hTheme,  WM_SETFONT, (WPARAM)g_hFontBtn, TRUE);
 
         /* combo field metrics -> frame rect */
-        SendMessageW(g_hFmt, CB_SETITEMHEIGHT, 0, 22);
+        SendMessageW(g_hFmt, CB_SETITEMHEIGHT, 0, 20);
         itemH = (int)SendMessageW(g_hFmt, CB_GETITEMHEIGHT, 0, 0);
-        if (itemH < 10) itemH = 22;
-        g_fmtFieldH = itemH + 2 * GetSystemMetrics(SM_CYEDGE);
-
-        /* field frame rects (parent-painted rounded borders) */
-        g_rcUrlF.left = 13;  g_rcUrlF.top = 145; g_rcUrlF.right = 687; g_rcUrlF.bottom = 177;
-        g_rcFmtF.left = 89;  g_rcFmtF.top = 185; g_rcFmtF.right = 411; g_rcFmtF.bottom = 186 + g_fmtFieldH + 2;
-        g_rcDirF.left = 89;  g_rcDirF.top = 231; g_rcDirF.right = 561; g_rcDirF.bottom = 263;
-        g_rcProg.left = 14;  g_rcProg.top = 340; g_rcProg.right = 686; g_rcProg.bottom = 368;
-        g_rcLog.left  = 13;  g_rcLog.top  = 381; g_rcLog.right  = 687; g_rcLog.bottom  = 575;
+        if (itemH < 10) itemH = 20;
+        (void)itemH;
 
         /* subclass fields: guaranteed dark fill + focus frame repaints */
         g_oldUrl = (WNDPROC)SetWindowLongPtrW(g_hUrl, GWLP_WNDPROC, (LONG_PTR)FieldSubProc);
@@ -1141,7 +1288,7 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
         }
 
         SetTimer(hwnd, 1, 250, NULL);   /* log drain + progress */
-        SetTimer(hwnd, 2, 45,  NULL);   /* brand animation */
+        SetTimer(hwnd, 2, 45,  NULL);   /* brand animation (spiral + orb + chip) */
         return 0;
     }
     case WM_TIMER:
@@ -1164,9 +1311,10 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
             }
             InvalidateRect(hwnd, &g_rcProg, FALSE);
         } else if (wp == 2) {
-            g_phase += 0.05;
+            g_tick++;
+            g_phase += 0.045;
             if (!IsIconic(hwnd))
-                InvalidateRect(hwnd, &g_rcHeader, FALSE);
+                InvalidateRect(hwnd, NULL, FALSE);
         }
         return 0;
     case WM_APP_DONE:
@@ -1176,6 +1324,7 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
             LogLine("Saved into the folder above. Use Open folder to see the file.");
         }
         InvalidateRect(hwnd, &g_rcProg, FALSE);
+        InvalidateRect(hwnd, &g_rcChip, FALSE);
         return 0;
     case WM_PAINT:
         OnPaint(hwnd);
@@ -1184,23 +1333,23 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
         return 1;
     case WM_CTLCOLOREDIT: {
         HDC dc = (HDC)wp;
-        SetTextColor(dc, g_pal.editTxt);
-        SetBkColor(dc, g_pal.editBg);
+        SetTextColor(dc, g_pal.txt);
+        SetBkColor(dc, g_pal.fieldBg);
         return (LRESULT)g_brEdit;
     }
     case WM_CTLCOLORLISTBOX:
-        SetTextColor((HDC)wp, g_pal.editTxt);
-        SetBkColor((HDC)wp, g_pal.editBg);
+        SetTextColor((HDC)wp, g_pal.txt);
+        SetBkColor((HDC)wp, g_pal.fieldBg);
         return (LRESULT)g_brEdit;
     case WM_CTLCOLORSTATIC: {
         HDC dc = (HDC)wp;
         if ((HWND)lp == g_hLog) {
-            SetTextColor(dc, g_pal.logTxt);
-            SetBkColor(dc, g_pal.logBg);
+            SetTextColor(dc, g_pal.txtDim);
+            SetBkColor(dc, g_pal.fieldBg);
             return (LRESULT)g_brLog;
         }
-        SetTextColor(dc, g_pal.editTxt);
-        SetBkColor(dc, g_pal.editBg);
+        SetTextColor(dc, g_pal.txt);
+        SetBkColor(dc, g_pal.fieldBg);
         return (LRESULT)g_brEdit;
     }
     case WM_COMMAND:
@@ -1224,15 +1373,28 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
         StopJob();
         KillTimer(hwnd, 1);
         KillTimer(hwnd, 2);
-        if (g_hFont)     DeleteObject(g_hFont);
-        if (g_hFontBtn)  DeleteObject(g_hFontBtn);
-        if (g_hMono)     DeleteObject(g_hMono);
-        if (g_hFontSm)   DeleteObject(g_hFontSm);
-        if (g_hFontWord) DeleteObject(g_hFontWord);
-        if (g_hFontSub)  DeleteObject(g_hFontSub);
-        if (g_brBg)      DeleteObject(g_brBg);
-        if (g_brEdit)    DeleteObject(g_brEdit);
-        if (g_brLog)     DeleteObject(g_brLog);
+        if (g_hFont)    DeleteObject(g_hFont);
+        if (g_hFontBtn) DeleteObject(g_hFontBtn);
+        if (g_hMono)    DeleteObject(g_hMono);
+        if (g_hH1)      DeleteObject(g_hH1);
+        if (g_hSub)     DeleteObject(g_hSub);
+        if (g_hLbl)     DeleteObject(g_hLbl);
+        if (g_hChip)    DeleteObject(g_hChip);
+        if (g_hFoot)    DeleteObject(g_hFoot);
+        if (g_brBg)     DeleteObject(g_brBg);
+        if (g_brEdit)   DeleteObject(g_brEdit);
+        if (g_brLog)    DeleteObject(g_brLog);
+        if (g_imgLogo)   { p_GdipDisposeImage(g_imgLogo);   g_imgLogo = NULL; }
+        if (g_imgSpiral) { p_GdipDisposeImage(g_imgSpiral); g_imgSpiral = NULL; }
+        if (g_imgOrb)    { p_GdipDisposeImage(g_imgOrb);    g_imgOrb = NULL; }
+        if (g_attrDark) { p_GdipDisposeImageAttributes(g_attrDark); g_attrDark = NULL; }
+        if (g_attrLite) { p_GdipDisposeImageAttributes(g_attrLite); g_attrLite = NULL; }
+        {
+            int i;
+            for (i = 0; i < 3; i++) {
+                if (g_streams[i]) { g_streams[i]->lpVtbl->Release(g_streams[i]); g_streams[i] = NULL; }
+            }
+        }
         PostQuitMessage(0);
         return 0;
     }
@@ -1244,6 +1406,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR cmdLine, int nShow)
     WNDCLASSW wc, bc;
     MSG msg;
     RECT wr;
+    GpStartupInput gsin;
 
     (void)hPrev; (void)cmdLine;
     InitializeCriticalSection(&g_cs);
@@ -1254,6 +1417,17 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR cmdLine, int nShow)
         InitCommonControlsEx(&icc);
     }
     CoInitializeEx(NULL, COINIT_APARTMENTTHREADED);
+
+    /* GDI+ for the real brand art (logo / spiral / orb) */
+    ZeroMemory(&gsin, sizeof(gsin));
+    gsin.GdiplusVersion = 1;
+    if (LoadGdiPlus() && p_GdiplusStartup(&g_gdipToken, &gsin, NULL) == 0) {
+        g_imgLogo   = ImageFromResource(RES_LOGO,   &g_streams[0]);
+        g_imgSpiral = ImageFromResource(RES_SPIRAL, &g_streams[1]);
+        g_imgOrb    = ImageFromResource(RES_ORB,    &g_streams[2]);
+        g_attrDark  = MakeAlphaAttr(0.90);
+        g_attrLite  = MakeAlphaAttr(0.25);
+    }
 
     LoadTheme();
     ApplyPalette();
@@ -1297,6 +1471,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR cmdLine, int nShow)
         DispatchMessageW(&msg);
     }
 
+    if (g_gdipToken && p_GdiplusShutdown) p_GdiplusShutdown(g_gdipToken);
     CoUninitialize();
     DeleteCriticalSection(&g_cs);
     return (int)msg.wParam;
