@@ -6,6 +6,10 @@
 ![Manifest](https://img.shields.io/badge/Manifest-V2%20%2B%20V3-blue)
 ![Tracking](https://img.shields.io/badge/tracking-none-success)
 
+---
+
+**XVidGrab** is part of the [3SVerse](https://3sverse.com) suite — software, systems & operations for wireless dealers and beyond. More free tools at [3sverse.com](https://3sverse.com).
+
 **XVidGrab** is a free, open-source **cross-browser extension** that downloads
 videos and animated GIFs from X (formerly Twitter) with one click. It runs in
 **every major browser**: Firefox, Chrome, Edge, Brave, Opera, Vivaldi and
