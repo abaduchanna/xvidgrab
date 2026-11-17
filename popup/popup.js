@@ -26,6 +26,17 @@ el("showButtons").addEventListener("change", () => {
 /* ---------------- video list ---------------- */
 let currentVideos = [];
 
+async function refreshVideos() {
+  try {
+    const res = await api.runtime.sendMessage({ type: "xvg-get-videos" });
+    renderVideos(res && res.videos, res && res.error);
+  } catch (e) {
+    renderVideos([], "Could not reach the active tab. Open x.com and try again.");
+  }
+}
+
+refreshVideos();
+
 function thumbRow(v) {
   const row = document.createElement("div");
   row.className = "video";
@@ -117,10 +128,74 @@ function renderVideos(videos, error) {
   el("bulkRow").hidden = !currentVideos.some((v) => v.hasMp4);
 }
 
-api.runtime.sendMessage({ type: "xvg-get-videos" }).then(
-  (res) => renderVideos(res && res.videos, res && res.error),
-  () => renderVideos([], "Could not reach the active tab. Open x.com and try again.")
-);
+/* ---------------- fetch all (auto-scroll to the end) ---------------- */
+let fetchTimer = null;
+let fetchLastRendered = -1;
+
+function setFetchButtons(running) {
+  el("fetchAll").disabled = running;
+  el("fetchStop").hidden = !running;
+}
+
+function startFetchPolling() {
+  setFetchButtons(true);
+  if (fetchTimer) clearInterval(fetchTimer);
+  fetchTimer = setInterval(pollFetchAll, 800);
+  pollFetchAll();
+}
+
+function stopFetchPolling(note) {
+  if (fetchTimer) { clearInterval(fetchTimer); fetchTimer = null; }
+  setFetchButtons(false);
+  if (note) el("fetchStatus").textContent = note;
+}
+
+async function pollFetchAll() {
+  let res = null;
+  try {
+    res = await api.runtime.sendMessage({ type: "xvg-fetchall", action: "status" });
+  } catch (e) { /* popup closing */ }
+  if (!res || !res.ok) { stopFetchPolling("Could not reach the page — is x.com open?"); return; }
+  if (res.running) {
+    el("fetchStatus").textContent =
+      "Collecting… " + res.count + " videos · scroll round " + res.round +
+      " · height " + res.scrollHeight + "px";
+    if (res.count !== fetchLastRendered && res.count > 0) {
+      fetchLastRendered = res.count;
+      refreshVideos();
+    }
+    return;
+  }
+  /* finished (or idle) */
+  stopFetchPolling(res.finishedAt
+    ? "Done — " + res.count + " videos collected. Download below."
+    : "Scrolls this page to the end and collects every video.");
+  if (res.finishedAt) refreshVideos();
+}
+
+el("fetchAll").addEventListener("click", async () => {
+  el("fetchStatus").textContent = "Starting… keep this tab in the foreground.";
+  let res = null;
+  try {
+    res = await api.runtime.sendMessage({ type: "xvg-fetchall", action: "start" });
+  } catch (e) { /* ignore */ }
+  if (res && res.ok) startFetchPolling();
+  else el("fetchStatus").textContent = "Could not start — open x.com first.";
+});
+
+el("fetchStop").addEventListener("click", async () => {
+  try { await api.runtime.sendMessage({ type: "xvg-fetchall", action: "stop" }); } catch (e) { /* ignore */ }
+  el("fetchStatus").textContent = "Stopping after the current round…";
+});
+
+/* popup may reopen mid-run: resume the live counter */
+(async () => {
+  let res = null;
+  try {
+    res = await api.runtime.sendMessage({ type: "xvg-fetchall", action: "status" });
+  } catch (e) { /* ignore */ }
+  if (res && res.ok && res.running) startFetchPolling();
+})();
 
 el("downloadAll").addEventListener("click", async () => {
   const btn = el("downloadAll");
