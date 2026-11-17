@@ -136,6 +136,41 @@ body {
   border-bottom: 1px solid #1c2126;
 }
 
+/* fetch-all row (scroll-to-end collector) */
+.fetchrow {
+  padding: 10px 14px;
+  border-bottom: 1px solid #1c2126;
+}
+
+.fetchrow-btns {
+  display: flex;
+  gap: 8px;
+}
+
+.fetchrow-btns .btn {
+  width: auto;
+  flex: 1;
+  white-space: nowrap;
+}
+
+.btn.stop {
+  flex: 0 0 auto;
+  background: #2f3336;
+  color: #f4212e;
+}
+
+.btn.stop:hover {
+  background: #3a3f43;
+}
+
+.fetch-status {
+  display: block;
+  margin-top: 7px;
+  color: #71767b;
+  font-size: 11px;
+  line-height: 1.4;
+}
+
 .btn {
   width: 100%;
   border: none;
