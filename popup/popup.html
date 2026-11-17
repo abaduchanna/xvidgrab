@@ -17,10 +17,12 @@
 
   <div class="fetchrow">
     <div class="fetchrow-btns">
-      <button id="fetchAll" class="btn primary">Fetch all videos (scroll to end)</button>
+      <button id="runAll" class="btn primary">Run (scroll + auto-download)</button>
+      <button id="fetchAll" class="btn secondary">Fetch all (collect only)</button>
       <button id="fetchStop" class="btn stop" hidden>Stop</button>
     </div>
-    <span id="fetchStatus" class="fetch-status">Scrolls this page to the end and collects every video.</span>
+    <span id="fetchStatus" class="fetch-status">Run scrolls the page and downloads every video it finds, as it finds them. You can still click any video's own Download button at any time, during or after a run.</span>
+    <div id="runLog" class="run-log" hidden></div>
   </div>
 
   <section class="videos" id="videos"></section>

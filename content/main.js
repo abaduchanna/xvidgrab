@@ -59,6 +59,7 @@
       pruneStore();
       updateBadge();
       scheduleScan();
+      queueAutoDownloads(); /* no-op unless a "Run" is in progress */
     }
   }
 
@@ -457,17 +458,100 @@
     finishedAt: 0,
     round: 0,
     count: 0,
-    scrollHeight: 0
+    scrollHeight: 0,
+    /* "Run" mode: download each video the moment it's found, instead of
+     * only collecting them for the popup's manual "Download all". */
+    autoDownload: false,
+    queued: new Set(),      /* record keys already queued this run */
+    downloadedCount: 0,
+    failedCount: 0,
+    log: []                 /* last N lines - "debugging on" visibility */
   };
+
+  const AUTO_DL_LOG_MAX = 200;
+  const AUTO_DL_GAP_MS = 900; /* spacing between auto-downloads - don't flood the browser's downloads API */
+
+  function logAuto(msg) {
+    const line = new Date().toLocaleTimeString() + "  " + msg;
+    fetchAll.log.push(line);
+    while (fetchAll.log.length > AUTO_DL_LOG_MAX) fetchAll.log.shift();
+    /* eslint-disable-next-line no-console */
+    console.log("[XVidGrab run]", msg);
+  }
+
+  let autoQueue = [];
+  let autoQueueRunning = false;
+
+  function queueAutoDownloads() {
+    if (!fetchAll.running || !fetchAll.autoDownload) return;
+    for (const rec of store.values()) {
+      if (fetchAll.queued.has(rec.key)) continue;
+      const src = pickSource(rec.sources || []);
+      if (!src) continue; /* no mp4 yet - this record may still fill in */
+      fetchAll.queued.add(rec.key);
+      autoQueue.push(rec.key);
+      logAuto("Found video" + (rec.author ? " @" + rec.author : "") + " - queued for download");
+    }
+    if (!autoQueueRunning) runAutoQueue();
+  }
+
+  async function runAutoQueue() {
+    autoQueueRunning = true;
+    try {
+      while (autoQueue.length) {
+        if (!fetchAll.running) break; /* Stop pressed */
+        const key = autoQueue.shift();
+        const rec = store.get(key);
+        const src = rec && pickSource(rec.sources || []);
+        if (!rec || !src) continue;
+        const filename = XVG.fileNameFor(rec, src);
+        logAuto("Downloading " + filename + " ...");
+        try {
+          const res = await api.runtime.sendMessage({
+            type: "xvg-download",
+            url: src.url,
+            filename,
+            tweet: rec.tweetId ? "https://x.com/i/status/" + rec.tweetId : null
+          }).catch((err) => ({ ok: false, error: String(err) }));
+          if (res && res.ok) {
+            fetchAll.downloadedCount += 1;
+            logAuto("Saved " + filename);
+          } else {
+            fetchAll.failedCount += 1;
+            logAuto("FAILED " + filename + " - " + ((res && res.error) || "unknown error"));
+          }
+        } catch (e) {
+          fetchAll.failedCount += 1;
+          logAuto("FAILED " + filename + " - " + String(e));
+        }
+        await sleep(AUTO_DL_GAP_MS);
+      }
+    } finally {
+      autoQueueRunning = false;
+      /* more records may have arrived from a later scroll round while we
+       * were downloading - pick them up instead of going idle for good */
+      if (fetchAll.running && fetchAll.autoDownload) queueAutoDownloads();
+    }
+  }
 
   function sleep(ms) { return new Promise((r) => setTimeout(r, ms)); }
 
-  async function fetchAllRun() {
+  async function fetchAllRun(autoDownload) {
     if (fetchAll.running) return;
     fetchAll.running = true;
     fetchAll.stop = false;
     fetchAll.startedAt = Date.now();
     fetchAll.finishedAt = 0;
+    fetchAll.autoDownload = !!autoDownload;
+    fetchAll.queued = new Set();
+    fetchAll.downloadedCount = 0;
+    fetchAll.failedCount = 0;
+    fetchAll.log = [];
+    autoQueue = [];
+    if (fetchAll.autoDownload) {
+      logAuto("Run started - scrolling and auto-downloading as videos are found");
+      queueAutoDownloads(); /* pick up anything already collected before Run was clicked */
+    }
     const HARD_CAP_MS = 12 * 60 * 1000;  /* safety: 12 minutes max */
     const STABLE_ROUNDS = 10;            /* ~6.5s no growth = feed end */
     let lastH = -1;
@@ -495,6 +579,17 @@
     fetchAll.stop = false;
     fetchAll.finishedAt = Date.now();
     fetchAll.count = store.size;
+    if (fetchAll.autoDownload) {
+      logAuto("Scrolling done - finishing queued downloads...");
+      /* let runAutoQueue() drain the rest; it checks fetchAll.running itself
+       * via queueAutoDownloads()'s re-arm, so flip running back on for it */
+      fetchAll.running = true;
+      queueAutoDownloads();
+      while (autoQueueRunning || autoQueue.length) await sleep(300);
+      fetchAll.running = false;
+      logAuto("Run finished - " + fetchAll.downloadedCount + " downloaded" +
+        (fetchAll.failedCount ? ", " + fetchAll.failedCount + " failed" : ""));
+    }
     updateBadge();
   }
 
@@ -502,11 +597,15 @@
     return {
       ok: true,
       running: fetchAll.running,
+      autoDownload: fetchAll.autoDownload,
       startedAt: fetchAll.startedAt,
       finishedAt: fetchAll.finishedAt,
       round: fetchAll.round,
       count: fetchAll.count,
-      scrollHeight: fetchAll.scrollHeight
+      scrollHeight: fetchAll.scrollHeight,
+      downloadedCount: fetchAll.downloadedCount,
+      failedCount: fetchAll.failedCount,
+      log: fetchAll.log.slice(-40)
     };
   }
 
@@ -548,7 +647,7 @@
       case "xvg-fetchall": {
         const action = msg.action || "status";
         if (action === "start") {
-          fetchAllRun(); /* async loop - replies immediately */
+          fetchAllRun(!!msg.autoDownload); /* async loop - replies immediately */
         } else if (action === "stop") {
           fetchAll.stop = true;
         }

@@ -128,17 +128,39 @@ function renderVideos(videos, error) {
   el("bulkRow").hidden = !currentVideos.some((v) => v.hasMp4);
 }
 
-/* ---------------- fetch all (auto-scroll to the end) ---------------- */
+/* ---------------- fetch all / run (auto-scroll to the end) ---------------- */
 let fetchTimer = null;
 let fetchLastRendered = -1;
+let runLogShown = 0; /* how many log lines already rendered, so we only append */
 
 function setFetchButtons(running) {
+  el("runAll").disabled = running;
   el("fetchAll").disabled = running;
   el("fetchStop").hidden = !running;
 }
 
+function renderRunLog(lines) {
+  const box = el("runLog");
+  if (!lines || !lines.length) { box.hidden = true; return; }
+  box.hidden = false;
+  /* only append new lines - keeps the log from re-flowing/jumping scroll
+   * position on every 800ms poll while a run is going */
+  for (let i = runLogShown; i < lines.length; i++) {
+    const line = lines[i];
+    const div = document.createElement("div");
+    if (/^\S+\s+FAILED /.test(line)) div.className = "fail";
+    else if (/^\S+\s+Saved /.test(line)) div.className = "ok";
+    div.textContent = line;
+    box.appendChild(div);
+  }
+  runLogShown = lines.length;
+  box.scrollTop = box.scrollHeight;
+}
+
 function startFetchPolling() {
   setFetchButtons(true);
+  runLogShown = 0;
+  el("runLog").textContent = "";
   if (fetchTimer) clearInterval(fetchTimer);
   fetchTimer = setInterval(pollFetchAll, 800);
   pollFetchAll();
@@ -156,10 +178,14 @@ async function pollFetchAll() {
     res = await api.runtime.sendMessage({ type: "xvg-fetchall", action: "status" });
   } catch (e) { /* popup closing */ }
   if (!res || !res.ok) { stopFetchPolling("Could not reach the page — is x.com open?"); return; }
+  if (res.autoDownload) renderRunLog(res.log);
   if (res.running) {
-    el("fetchStatus").textContent =
-      "Collecting… " + res.count + " videos · scroll round " + res.round +
-      " · height " + res.scrollHeight + "px";
+    el("fetchStatus").textContent = res.autoDownload
+      ? "Running… " + res.count + " found, " + res.downloadedCount + " downloaded" +
+        (res.failedCount ? ", " + res.failedCount + " failed" : "") +
+        " · scroll round " + res.round
+      : "Collecting… " + res.count + " videos · scroll round " + res.round +
+        " · height " + res.scrollHeight + "px";
     if (res.count !== fetchLastRendered && res.count > 0) {
       fetchLastRendered = res.count;
       refreshVideos();
@@ -167,11 +193,26 @@ async function pollFetchAll() {
     return;
   }
   /* finished (or idle) */
-  stopFetchPolling(res.finishedAt
-    ? "Done — " + res.count + " videos collected. Download below."
-    : "Scrolls this page to the end and collects every video.");
+  if (res.finishedAt && res.autoDownload) {
+    stopFetchPolling("Run finished — " + res.downloadedCount + " downloaded" +
+      (res.failedCount ? ", " + res.failedCount + " failed" : "") + ".");
+  } else {
+    stopFetchPolling(res.finishedAt
+      ? "Done — " + res.count + " videos collected. Download below, or click Run next time to auto-download."
+      : "Run scrolls the page and downloads every video it finds, as it finds them. You can still click any video's own Download button at any time, during or after a run.");
+  }
   if (res.finishedAt) refreshVideos();
 }
+
+el("runAll").addEventListener("click", async () => {
+  el("fetchStatus").textContent = "Starting… keep this tab in the foreground.";
+  let res = null;
+  try {
+    res = await api.runtime.sendMessage({ type: "xvg-fetchall", action: "start", autoDownload: true });
+  } catch (e) { /* ignore */ }
+  if (res && res.ok) startFetchPolling();
+  else el("fetchStatus").textContent = "Could not start — open x.com first.";
+});
 
 el("fetchAll").addEventListener("click", async () => {
   el("fetchStatus").textContent = "Starting… keep this tab in the foreground.";

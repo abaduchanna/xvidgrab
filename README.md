@@ -35,6 +35,12 @@ released under the MIT license.
   current page (search results, timelines, profiles…) to the very end and
   collects every video it passes, with a live counter. Stop anytime; the
   collected list is ready for single or bulk download.
+- **Run (scroll + auto-download)** — a second popup button that scrolls the
+  page AND downloads each video the moment it's found, instead of collecting
+  first and downloading after. A live log in the popup shows every video
+  found and every download as it happens. The per-post Download button next
+  to each video still works normally at the same time, so you can grab one
+  manually whenever you like - Run doesn't take that over.
 - **Best quality automatically** — progressive MP4 variants are ranked by
   bitrate and resolution (`720p`, `1080p`…) with standard
   shorter-side resolution tiers. `Smallest file` mode is available in the popup.

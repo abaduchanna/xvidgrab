@@ -163,6 +163,20 @@ body {
   background: #3a3f43;
 }
 
+.btn.secondary {
+  background: #2f3336;
+  color: #e7e9ea;
+}
+
+.btn.secondary:hover {
+  background: #3a3f43;
+}
+
+.btn.secondary:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+
 .fetch-status {
   display: block;
   margin-top: 7px;
@@ -170,6 +184,23 @@ body {
   font-size: 11px;
   line-height: 1.4;
 }
+
+.run-log {
+  margin-top: 8px;
+  max-height: 110px;
+  overflow-y: auto;
+  background: #000;
+  border: 1px solid #2f3336;
+  border-radius: 8px;
+  padding: 6px 8px;
+  font: 10.5px/1.5 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  color: #71767b;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.run-log .fail { color: #f4212e; }
+.run-log .ok { color: #00ba7c; }
 
 .btn {
   width: 100%;
