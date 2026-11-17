@@ -28,6 +28,13 @@ released under the MIT license.
 
 - **One-click download** — a native-feeling download button is injected into
   the action row of every post containing a video or animated GIF.
+- **Search pages work** — video posts on x.com search results show download
+  buttons even before they are played (unplayed cards expose no video player,
+  so v1.1.0 missed them).
+- **Fetch all videos (scroll to end)** — one popup button auto-scrolls the
+  current page (search results, timelines, profiles…) to the very end and
+  collects every video it passes, with a live counter. Stop anytime; the
+  collected list is ready for single or bulk download.
 - **Best quality automatically** — progressive MP4 variants are ranked by
   bitrate and resolution (`720p`, `1080p`…) with standard
   shorter-side resolution tiers. `Smallest file` mode is available in the popup.
