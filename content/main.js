@@ -16,8 +16,8 @@
   /* ---------------------------------------------------------------- */
   /* state                                                            */
   /* ---------------------------------------------------------------- */
-  const RECORD_TTL = 15 * 60 * 1000;
-  const RECORD_MAX = 150;
+  const RECORD_TTL = 60 * 60 * 1000;
+  const RECORD_MAX = 600;
 
   const store = new Map();          /* key -> record */
   const btnByArticle = new WeakMap();
@@ -124,6 +124,15 @@
   /* ---------------------------------------------------------------- */
   const BTN_SIZE = "34.75px";
 
+  /* A tweet counts as a video post when any of these render inside it.
+   * NOTE: on search pages videos do NOT autoplay, so the videoPlayer
+   * container never mounts until the user clicks play. Unplayed cards
+   * expose the videoComponent wrapper / playButton glyph instead -
+   * without these, search results showed no download buttons at all. */
+  const VIDEO_HINTS =
+    "[data-testid='videoPlayer'],[data-testid='videoComponent']," +
+    "[data-testid='playButton'],video";
+
   function makeIcon() {
     const SVGNS = "http://www.w3.org/2000/svg";
     const svg = document.createElementNS(SVGNS, "svg");
@@ -179,8 +188,15 @@
     }
     for (const link of art.querySelectorAll("a[href*='/status/']")) {
       const href = link.getAttribute("href") || "";
-      if (/\/(analytics|photo|video)\//.test(href)) continue;
+      if (/\/(analytics|photo)\//.test(href)) continue;
       const m = /\/status\/(\d+)/.exec(href);
+      if (m) return m[1];
+    }
+    /* Search-result video cards often link ONLY via /status/<id>/video/1
+     * (canonical status links are absent on unplayed tiles) - the tweet id
+     * is still recoverable from them, so keep this as the last resort. */
+    for (const link of art.querySelectorAll("a[href*='/video/']")) {
+      const m = /\/status\/(\d+)\/(?:video|photo)\//.exec(link.getAttribute("href") || "");
       if (m) return m[1];
     }
     return null;
@@ -198,7 +214,7 @@
     const articles = document.querySelectorAll("article[data-testid='tweet']");
     for (const art of articles) {
       try {
-        if (!art.querySelector("[data-testid='videoPlayer']")) continue;
+        if (!art.querySelector(VIDEO_HINTS)) continue;
         const group = art.querySelector("div[role='group']");
         if (!group || group.querySelector("[data-xvg-btn]")) continue;
         const btn = document.createElement("button");
@@ -426,6 +442,75 @@
   }
 
   /* ---------------------------------------------------------------- */
+  /* fetch-all: auto-scroll the feed to the end, collecting videos    */
+  /*                                                                  */
+  /* The page sniffer parses every GraphQL response the site loads, so */
+  /* simply scrolling a search page (SearchTimeline) collects each     */
+  /* video post. This loop scrolls stepwise until the feed stops       */
+  /* growing (height AND collected count stable ~6.5s) or a safety     */
+  /* cap hits, so "sab videos last tak" end up in the popup list.      */
+  /* ---------------------------------------------------------------- */
+  const fetchAll = {
+    running: false,
+    stop: false,
+    startedAt: 0,
+    finishedAt: 0,
+    round: 0,
+    count: 0,
+    scrollHeight: 0
+  };
+
+  function sleep(ms) { return new Promise((r) => setTimeout(r, ms)); }
+
+  async function fetchAllRun() {
+    if (fetchAll.running) return;
+    fetchAll.running = true;
+    fetchAll.stop = false;
+    fetchAll.startedAt = Date.now();
+    fetchAll.finishedAt = 0;
+    const HARD_CAP_MS = 12 * 60 * 1000;  /* safety: 12 minutes max */
+    const STABLE_ROUNDS = 10;            /* ~6.5s no growth = feed end */
+    let lastH = -1;
+    let lastCount = -1;
+    let stable = 0;
+    try {
+      while (!fetchAll.stop && Date.now() - fetchAll.startedAt < HARD_CAP_MS) {
+        window.scrollBy(0, Math.max(400, Math.round(window.innerHeight * 0.9)));
+        await sleep(650);
+        const h = document.scrollingElement
+          ? document.scrollingElement.scrollHeight
+          : document.documentElement.scrollHeight;
+        fetchAll.round += 1;
+        fetchAll.scrollHeight = h;
+        fetchAll.count = store.size;
+        if (h === lastH && fetchAll.count === lastCount) stable += 1;
+        else stable = 0;
+        lastH = h;
+        lastCount = fetchAll.count;
+        if (stable >= STABLE_ROUNDS) break;
+      }
+    } catch (e) { /* never break the page */ }
+    try { window.scrollTo(0, 0); } catch (e) { /* ignore */ }
+    fetchAll.running = false;
+    fetchAll.stop = false;
+    fetchAll.finishedAt = Date.now();
+    fetchAll.count = store.size;
+    updateBadge();
+  }
+
+  function fetchAllStatus() {
+    return {
+      ok: true,
+      running: fetchAll.running,
+      startedAt: fetchAll.startedAt,
+      finishedAt: fetchAll.finishedAt,
+      round: fetchAll.round,
+      count: fetchAll.count,
+      scrollHeight: fetchAll.scrollHeight
+    };
+  }
+
+  /* ---------------------------------------------------------------- */
   /* popup + background messaging                                     */
   /* ---------------------------------------------------------------- */
   function listForPopup() {
@@ -447,7 +532,7 @@
         })),
         hasMp4: rec.sources.some((s) => s.kind === "mp4")
       });
-      if (videos.length >= 40) break;
+      if (videos.length >= 500) break;
     }
     return videos;
   }
@@ -459,6 +544,16 @@
       case "xvg-replay-url":
         dispatchReplay(msg);
         return Promise.resolve({ ok: true });
+
+      case "xvg-fetchall": {
+        const action = msg.action || "status";
+        if (action === "start") {
+          fetchAllRun(); /* async loop - replies immediately */
+        } else if (action === "stop") {
+          fetchAll.stop = true;
+        }
+        return Promise.resolve(fetchAllStatus());
+      }
 
       case "xvg-get-videos":
         return Promise.resolve({ videos: listForPopup() });
@@ -484,7 +579,7 @@
     try {
       const res = await api.runtime.sendMessage({ type: "xvg-get-captured" })
         .catch(() => ({ captures: [] }));
-      (res && res.captures || []).slice(0, 12).forEach(dispatchReplay);
+      (res && res.captures || []).slice(0, 40).forEach(dispatchReplay);
     } catch (e) { /* ignore */ }
   })();
 
