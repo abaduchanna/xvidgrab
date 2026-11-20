@@ -302,6 +302,177 @@ var XVG = (function () {
       .replace(/[\\/:*?"<>|]/g, "_");
   }
 
+  /*
+   * Extract every URL-looking token from a blob of text (one or more
+   * links, any whitespace/newline/comma separation). Returns raw strings;
+   * callers validate with parseXLink().
+   */
+  function extractLinks(text) {
+    var out = [];
+    if (!text || typeof text !== "string") return out;
+    var re = /(?:https?:\/\/|(?:(?:x|twitter)\.com|t\.co)\/)[^\s"'<>]+/gi;
+    var m;
+    while ((m = re.exec(text)) !== null) {
+      var u = m[0].replace(/[.,;:)\]]+$/, "");
+      if (u) out.push(u);
+    }
+    return out;
+  }
+
+  /*
+   * Classify an X (Twitter) link into a fetch plan:
+   *   { ok, kind, url, url2, screenName, tweetId }
+   *   kind "tweet"   — one status post (fetched directly, no tab when possible)
+   *   kind "profile" — a user timeline; url = profile root, url2 = /media tab
+   *   kind "search"  — a search results page (scroll collected)
+   *   kind "page"    — any other x.com page (list, explore, hashtag...)
+   * Hosts: x.com, twitter.com, mobile.x.com, m.twitter.com. t.co links are
+   * opened as "page" (the tab follows the redirect to their real target).
+   */
+  var RESERVED_SEGMENTS = [
+    "home", "i", "explore", "search", "notifications", "messages",
+    "settings", "intent", "compose", "bookmarks", "tos",
+    "privacy", "help", "logout", "signup", "login", "register"
+  ];
+
+  function parseXLink(raw) {
+    var input = typeof raw === "string" ? raw.trim() : "";
+    if (!input) return { ok: false, reason: "empty" };
+    if (!/^https?:\/\//i.test(input)) input = "https://" + input;
+    var u;
+    try { u = new URL(input); } catch (e) { return { ok: false, reason: "not-a-url" }; }
+    if (u.protocol !== "https:" && u.protocol !== "http:") return { ok: false, reason: "bad-protocol" };
+
+    var host = String(u.hostname || "").toLowerCase();
+    if (host === "t.co" || host === "www.t.co") {
+      return { ok: true, kind: "page", url: "https://" + host + u.pathname + u.search, screenName: null, tweetId: null };
+    }
+    if (!/^(?:www\.|mobile\.|m\.)?(?:twitter\.com|x\.com)$/.test(host)) {
+      return { ok: false, reason: "not-an-x-link" };
+    }
+
+    var path = String(u.pathname || "/").replace(/\/+$/, "") || "/";
+    var segs = path.split("/").filter(Boolean);
+    var base = "https://x.com";
+
+    /* 1. a status post — /<user>/status/<id>[...], /i/web/status/<id> */
+    var sm = /\/status\/(\d+)/.exec(path);
+    if (sm) {
+      return { ok: true, kind: "tweet", url: base + "/i/web/status/" + sm[1], screenName: null, tweetId: sm[1] };
+    }
+
+    /* 2. search — keep the query, drop tracking params */
+    if (segs[0] === "search") {
+      var q = u.searchParams.get("q");
+      if (!q) return { ok: true, kind: "page", url: base + "/explore", screenName: null, tweetId: null };
+      return { ok: true, kind: "search", url: base + "/search?q=" + encodeURIComponent(q), screenName: null, tweetId: null };
+    }
+
+    /* 3. profile — a single handle, optionally with a timeline sub-tab */
+    var PROFILE_SUBTABS = ["media", "with_replies", "highlights", "likes", "superfollows"];
+    if (segs.length === 1 && RESERVED_SEGMENTS.indexOf(segs[0]) === -1 &&
+        /^[A-Za-z0-9_]{1,15}$/.test(segs[0])) {
+      var s = segs[0];
+      return {
+        ok: true, kind: "profile",
+        url: base + "/" + s,
+        url2: base + "/" + s + "/media",
+        screenName: s, tweetId: null
+      };
+    }
+    if (segs.length === 2 && RESERVED_SEGMENTS.indexOf(segs[0]) === -1 &&
+        /^[A-Za-z0-9_]{1,15}$/.test(segs[0]) &&
+        PROFILE_SUBTABS.indexOf(segs[1]) !== -1) {
+      var s2 = segs[0];
+      var want = segs[1];
+      return {
+        ok: true, kind: "profile",
+        url: want === "media" ? base + "/" + s2 + "/media" : base + "/" + s2,
+        url2: want === "media" ? null : base + "/" + s2 + "/media",
+        screenName: s2, tweetId: null
+      };
+    }
+
+    /* 4. everything else (lists, hashtags, explore, events...) — open and
+     * scroll-collect whatever the page loads */
+    return { ok: true, kind: "page", url: base + (path === "/" ? "/home" : path) + (u.search || ""), screenName: null, tweetId: null };
+  }
+
+  /*
+   * Flight-stream salvage.
+   *
+   * Some X responses are react-server "flight" payloads (JSON islands
+   * embedded inside string chunks) rather than pure JSON — JSON.parse
+   * throws on them and the sniffer would miss every video on the page.
+   * When that happens, harvest "video_info":{...} islands brace-wise and
+   * re-parse them as standalone objects. Records built this way carry no
+   * tweet context (keyed by source URL), but the videos still land in the
+   * list — far better than a silent zero.
+   */
+  function harvestIslands(text) {
+    var out = [];
+    var KEY = "video_info";
+    var idx = 0;
+    while (out.length < 400) {
+      var k = text.indexOf(KEY, idx);
+      if (k === -1) break;
+      idx = k + KEY.length;
+      var open = text.indexOf("{", idx);
+      if (open === -1) break;
+      if (open - idx > 4) continue; /* key must be followed by its object */
+      var depth = 0, inStr = false, esc = false, end = -1;
+      for (var i = open; i < text.length; i++) {
+        var ch = text.charAt(i);
+        if (inStr) {
+          if (esc) esc = false;
+          else if (ch === "\\") esc = true;
+          else if (ch === "\"") inStr = false;
+          continue;
+        }
+        if (ch === "\"") { inStr = true; continue; }
+        if (ch === "{") depth++;
+        else if (ch === "}") {
+          depth--;
+          if (depth === 0) { end = i; break; }
+        }
+      }
+      if (end === -1) break;
+      try {
+        var parsed = JSON.parse(text.slice(open, end + 1));
+        if (parsed && Array.isArray(parsed.variants)) {
+          out.push(parsed);
+        }
+      } catch (e) { /* malformed island — skip */ }
+      idx = end + 1;
+    }
+    return out;
+  }
+
+  function parseFlightText(text) {
+    if (!text || typeof text !== "string" || text.indexOf("video_info") === -1) return [];
+    var records = [];
+    var islands = harvestIslands(text);
+    if (!islands.length && text.indexOf("\\\"") !== -1) {
+      /* JSON-in-JSON escaped payload: unescape one level and retry */
+      islands = harvestIslands(text.replace(/\\\\\"/g, "\\\"").replace(/\\"/g, "\""));
+    }
+    for (var i = 0; i < islands.length; i++) {
+      var sources = parseVariants(islands[i].variants);
+      if (!sources.length) continue;
+      records.push({
+        tweetId: null,
+        author: null,
+        text: null,
+        type: "video",
+        thumbnail: null,
+        mediaIds: [],
+        key: sources[0].url,
+        sources: sources
+      });
+    }
+    return records;
+  }
+
   return {
     parseMedia: parseMedia,
     parseVariants: parseVariants,
@@ -311,6 +482,9 @@ var XVG = (function () {
     qualityLabel: qualityLabel,
     fileNameFor: fileNameFor,
     classify: classify,
-    dimsFromUrl: dimsFromUrl
+    dimsFromUrl: dimsFromUrl,
+    extractLinks: extractLinks,
+    parseXLink: parseXLink,
+    parseFlightText: parseFlightText
   };
 })();

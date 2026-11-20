@@ -28,7 +28,8 @@
   }
 
   function isGraphQLUrl(url) {
-    return typeof url === "string" && url.indexOf("/graphql/") !== -1;
+    return typeof url === "string" &&
+      (url.indexOf("/graphql/") !== -1 || url.indexOf("/i/api/") !== -1);
   }
 
   function isTwimgStreamUrl(url) {
@@ -57,6 +58,19 @@
     var items;
     try { items = XVG.parseMedia(json); } catch (e) { return; }
     if (items && items.length) emit("xvg:media", { items: items });
+  }
+
+  /* JSON first; when the payload is a flight stream (not parseable JSON),
+   * the salvage parser still recovers the video_info islands. */
+  function handleText(txt) {
+    try {
+      handleJson(JSON.parse(txt));
+      return;
+    } catch (e) { /* flight / non-JSON payload */ }
+    try {
+      var items = XVG.parseFlightText(txt);
+      if (items && items.length) emit("xvg:media", { items: items });
+    } catch (e) { /* never break the page */ }
   }
 
   function handleResponseUrl(url) {
@@ -93,7 +107,7 @@
             try {
               if (res && typeof res.clone === "function") {
                 res.clone().text().then(function (txt) {
-                  try { handleJson(JSON.parse(txt)); } catch (e) { /* not JSON */ }
+                  handleText(txt);
                 }).catch(function () { /* body unavailable */ });
               }
             } catch (e) { /* detached */ }
@@ -131,7 +145,7 @@
             var rt = xhr.responseType;
             if (rt === "" || rt === "text") {
               handleResponseUrl(url);
-              try { handleJson(JSON.parse(xhr.responseText)); } catch (e) { /* not JSON */ }
+              handleText(xhr.responseText);
             } else if (rt === "json") {
               handleJson(xhr.response);
             }
@@ -161,7 +175,11 @@
     var init = { headers: headers, credentials: "include" };
     var p = origFetch.call(window, url, init);
     p.then(function (res) {
-      try { return res.json(); } catch (e) { return null; }
-    }).then(handleJson).catch(function () { /* ignore */ });
+      return res.text();
+    }).then(function (txt) {
+      try { handleJson(JSON.parse(txt)); return; } catch (e) { /* flight payload */ }
+      var items = (typeof XVG !== "undefined" && XVG.parseFlightText) ? XVG.parseFlightText(txt) : [];
+      if (items && items.length) emit("xvg:media", { items: items });
+    }).catch(function () { /* ignore */ });
   });
 })();

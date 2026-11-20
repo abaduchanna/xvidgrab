@@ -23,19 +23,26 @@ el("showButtons").addEventListener("change", () => {
   api.storage.local.set({ showButtons: el("showButtons").checked }).catch(() => {});
 });
 
-/* ---------------- video list ---------------- */
+/* ---------------- video list (global: all tabs + link jobs) ---------------- */
 let currentVideos = [];
+let lastMediaRev = -1;
 
-async function refreshVideos() {
+async function refreshVideos(force) {
+  let res = null;
   try {
-    const res = await api.runtime.sendMessage({ type: "xvg-get-videos" });
-    renderVideos(res && res.videos, res && res.error);
-  } catch (e) {
-    renderVideos([], "Could not reach the active tab. Open x.com and try again.");
+    res = await api.runtime.sendMessage({ type: "xvg-get-videos-global" });
+  } catch (e) { /* background unavailable */ }
+  if (!res || !res.ok) {
+    renderVideos([], "Could not reach the extension background — reopen the popup.");
+    return;
   }
+  if (!force && res.rev === lastMediaRev && currentVideos.length === (res.videos || []).length) return;
+  lastMediaRev = res.rev;
+  renderVideos(res.videos || []);
 }
 
-refreshVideos();
+refreshVideos(true);
+setInterval(() => refreshVideos(false), 1200);
 
 function thumbRow(v) {
   const row = document.createElement("div");
@@ -79,7 +86,7 @@ function thumbRow(v) {
     btn.disabled = true;
     btn.textContent = "Saving…";
     const res = await api.runtime.sendMessage({
-      type: "xvg-download-source",
+      type: "xvg-download-source-global",
       key: v.key,
       sourceUrl: sel.value || null
     }).catch((err) => ({ ok: false, error: String(err) }));
@@ -114,7 +121,7 @@ function renderVideos(videos, error) {
     const empty = document.createElement("div");
     empty.className = "empty";
     empty.textContent = error ||
-      "No videos detected yet. Open x.com, scroll past a post with a video, then reopen this popup.";
+      "No videos collected yet. Add links above, or open x.com and scroll past a post with a video.";
     box.appendChild(empty);
     el("bulkRow").hidden = true;
     el("status").textContent = "Waiting for videos…";
@@ -122,7 +129,7 @@ function renderVideos(videos, error) {
   }
 
   el("status").textContent = currentVideos.length + " video" +
-    (currentVideos.length > 1 ? "s" : "") + " detected on this tab";
+    (currentVideos.length > 1 ? "s" : "") + " collected (all tabs + link jobs)";
 
   for (const v of currentVideos) box.appendChild(thumbRow(v));
   el("bulkRow").hidden = !currentVideos.some((v) => v.hasMp4);
@@ -247,7 +254,7 @@ el("downloadAll").addEventListener("click", async () => {
     const best = (v.sources || []).filter((s) => s.kind === "mp4")[0];
     if (!best) continue;
     const res = await api.runtime.sendMessage({
-      type: "xvg-download-source",
+      type: "xvg-download-source-global",
       key: v.key,
       sourceUrl: best.url
     }).catch(() => ({ ok: false }));
@@ -259,6 +266,168 @@ el("downloadAll").addEventListener("click", async () => {
     btn.disabled = false;
   }, 2600);
 });
+
+/* ---------------- link jobs (fetch from links) ---------------- */
+const KIND_CHIP = { profile: "PROFILE", tweet: "POST", search: "SEARCH", page: "PAGE" };
+
+async function pollJobs() {
+  let res = null;
+  try {
+    res = await api.runtime.sendMessage({ type: "xvg-jobs", action: "status" });
+  } catch (e) { /* background unavailable */ }
+  renderQueue(res);
+}
+
+function renderQueue(res) {
+  const list = el("queue");
+  const jobs = (res && res.jobs) || [];
+  const active = !!(res && res.active);
+  const hasDone = jobs.some((j) => j.status === "done" || j.status === "failed");
+  const hasQueued = jobs.some((j) => j.status === "queued");
+
+  el("queueEmpty").hidden = jobs.length > 0;
+  list.hidden = jobs.length === 0;
+  list.textContent = "";
+
+  for (const j of jobs) {
+    const li = document.createElement("li");
+    li.className = "q-row st-" + j.status;
+
+    const chip = document.createElement("span");
+    chip.className = "q-chip";
+    chip.textContent = KIND_CHIP[j.kind] || "PAGE";
+
+    const name = document.createElement("span");
+    name.className = "q-name";
+    name.textContent = j.label || j.url;
+    name.title = j.url + (j.error ? " — " + j.error : "");
+
+    const st = document.createElement("span");
+    st.className = "q-status";
+    if (j.status === "queued") st.textContent = "waiting";
+    else if (j.status === "running") st.textContent = "fetching… " + (j.count || 0) + " found";
+    else if (j.status === "done") st.textContent = (j.error ? "done — " + j.error : "done — " + j.count + " video" + (j.count === 1 ? "" : "s"));
+    else st.textContent = "failed — " + (j.error || "error");
+
+    li.appendChild(chip);
+    li.appendChild(name);
+    li.appendChild(st);
+
+    if (j.status === "queued") {
+      const rm = document.createElement("button");
+      rm.className = "q-remove";
+      rm.textContent = "x";
+      rm.title = "Remove from queue";
+      rm.addEventListener("click", async () => {
+        try { await api.runtime.sendMessage({ type: "xvg-jobs", action: "remove", id: j.id }); } catch (e) { /* ignore */ }
+        pollJobs();
+      });
+      li.appendChild(rm);
+    }
+
+    list.appendChild(li);
+  }
+
+  const running = jobs.filter((j) => j.status === "running").length;
+  const queued = jobs.filter((j) => j.status === "queued").length;
+  const foundTotal = jobs.reduce((n, j) => n + (j.status === "done" ? (j.count || 0) : 0), 0);
+
+  let statusText = "";
+  if (active && running) statusText = "Fetching " + (running + queued) + " page" + ((running + queued) === 1 ? "" : "s") + " in the background…";
+  else if (queued) statusText = queued + " link" + (queued === 1 ? "" : "s") + " waiting — press Fetch";
+  else if (hasDone) statusText = "Done — " + foundTotal + " video" + (foundTotal === 1 ? "" : "s") + " collected in total";
+  el("queueStatus").textContent = statusText;
+
+  el("queueStop").hidden = !active;
+  el("queueFetch").hidden = active || !hasQueued;
+  el("queueClear").hidden = !hasDone || active;
+}
+
+el("queueStop").addEventListener("click", async () => {
+  try { await api.runtime.sendMessage({ type: "xvg-jobs", action: "stop" }); } catch (e) { /* ignore */ }
+  el("queueStatus").textContent = "Stopping after the current page…";
+  pollJobs();
+});
+
+el("queueFetch").addEventListener("click", async () => {
+  try { await api.runtime.sendMessage({ type: "xvg-jobs", action: "resume" }); } catch (e) { /* ignore */ }
+  pollJobs();
+});
+
+el("queueClear").addEventListener("click", async () => {
+  try { await api.runtime.sendMessage({ type: "xvg-jobs", action: "clear" }); } catch (e) { /* ignore */ }
+  pollJobs();
+});
+
+/* ---------------- add-links dialog ---------------- */
+function openLinksModal() {
+  el("addLinksModal").hidden = false;
+  el("linksError").hidden = true;
+  el("linksInput").value = "";
+  el("linksInput").focus();
+}
+
+function closeLinksModal() {
+  el("addLinksModal").hidden = true;
+}
+
+function showLinksError(msg) {
+  const box = el("linksError");
+  box.textContent = msg;
+  box.hidden = false;
+}
+
+el("addLinksBtn").addEventListener("click", openLinksModal);
+el("linksCancel").addEventListener("click", closeLinksModal);
+
+api.storage.local.get({ jobAutoDownload: true }).then((s) => {
+  el("jobAutoDl").checked = s.jobAutoDownload !== false;
+}).catch(() => {});
+
+async function submitLinks() {
+  const raw = el("linksInput").value || "";
+  const urls = (window.XVG && XVG.extractLinks) ? XVG.extractLinks(raw) : [];
+  if (!urls.length) {
+    showLinksError("No x.com links found — paste links like https://x.com/username");
+    return;
+  }
+  const autoDownload = el("jobAutoDl").checked;
+  api.storage.local.set({ jobAutoDownload: autoDownload }).catch(() => {});
+
+  let res = null;
+  try {
+    res = await api.runtime.sendMessage({
+      type: "xvg-jobs", action: "add", urls, autoDownload
+    });
+  } catch (e) { /* ignore */ }
+
+  if (!res || !res.ok) {
+    showLinksError("Could not add links — reopen the popup and try again.");
+    return;
+  }
+
+  const bad = (res.results || []).filter((r) => !r.ok);
+  if (bad.length) {
+    showLinksError("Skipped " + bad.length + " link" + (bad.length === 1 ? "" : "s") +
+      " (not x.com links): " + bad.slice(0, 3).map((b) => b.input).join(", "));
+    setTimeout(closeLinksModal, 1800);
+    pollJobs();
+    return;
+  }
+
+  closeLinksModal();
+  el("queueStatus").textContent = "Added " + (res.results || []).length +
+    " link" + ((res.results || []).length === 1 ? "" : "s") + " — fetching in the background…";
+  pollJobs();
+}
+
+el("linksAddFetch").addEventListener("click", submitLinks);
+el("linksInput").addEventListener("keydown", (ev) => {
+  if ((ev.ctrlKey || ev.metaKey) && ev.key === "Enter") submitLinks();
+});
+
+pollJobs();
+setInterval(pollJobs, 900);
 
 /* ---------------- history ---------------- */
 function timeAgo(ts) {

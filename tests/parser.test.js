@@ -234,6 +234,61 @@ cyc.self = cyc;
 ok(XVG.parseMedia(cyc).length === 1, "cyclic payload safe (WeakSet guard)");
 ok(XVG.dimsFromUrl("https://video.twimg.com/a/720x1280/x.mp4").h === 1280, "portrait dims from URL");
 
+console.log("[6] link parsing (parseXLink)");
+let p;
+p = XVG.parseXLink("https://x.com/Kazimirol2");
+ok(p.ok && p.kind === "profile" && p.screenName === "Kazimirol2", "bare profile link -> profile, got " + JSON.stringify(p));
+ok(p.url === "https://x.com/Kazimirol2" && p.url2 === "https://x.com/Kazimirol2/media", "profile fetch plan = root + media tab");
+
+p = XVG.parseXLink("x.com/Kazimirol2");
+ok(p.ok && p.kind === "profile", "scheme-less profile link ok");
+
+p = XVG.parseXLink("https://x.com/Kazimirol2/media");
+ok(p.ok && p.kind === "profile" && p.url === "https://x.com/Kazimirol2/media" && p.url2 === null, "explicit /media -> media pass only");
+
+p = XVG.parseXLink("https://twitter.com/nasa/status/1711111111111111111/video/1");
+ok(p.ok && p.kind === "tweet" && p.tweetId === "1711111111111111111", "twitter.com status + /video/1 -> tweet");
+
+p = XVG.parseXLink("https://x.com/i/web/status/1795555555555555555?s=21");
+ok(p.ok && p.kind === "tweet" && p.tweetId === "1795555555555555555" && p.url === "https://x.com/i/web/status/1795555555555555555", "i/web/status link normalized, tracking param dropped");
+
+p = XVG.parseXLink("https://x.com/search?q=cat%20videos&src=typed_query");
+ok(p.ok && p.kind === "search" && p.url === "https://x.com/search?q=cat%20videos", "search link keeps query, drops tracking");
+
+p = XVG.parseXLink("https://x.com/explore");
+ok(p.ok && p.kind === "page", "explore -> generic page");
+
+p = XVG.parseXLink("https://x.com/i/lists/12345");
+ok(p.ok && p.kind === "page", "list page -> generic page");
+
+p = XVG.parseXLink("https://google.com/nasa");
+ok(!p.ok, "non-X host rejected");
+
+p = XVG.parseXLink("not a link at all");
+ok(!p.ok, "garbage rejected");
+
+p = XVG.parseXLink("https://mobile.twitter.com/NASA");
+ok(p.ok && p.kind === "profile" && p.screenName === "NASA", "mobile.twitter.com normalized");
+
+console.log("[7] extractLinks");
+const found = XVG.extractLinks("Check https://x.com/Kazimirol2 and https://x.com/nasa/status/123, plus t.co/xyz!");
+ok(found.length === 3, "three links found in text, got " + found.length);
+ok(found[0] === "https://x.com/Kazimirol2", "first link clean");
+ok(found[1] === "https://x.com/nasa/status/123", "trailing comma stripped");
+
+console.log("[8] flight-stream salvage (parseFlightText)");
+const flight = '1b:["$","div",null,{"props":"x"}]2a:["$","$L3",null,{"tweet":{"rest_id":"1711111111111111111","video_info":{"variants":[{"bitrate":2176000,"content_type":"video/mp4","url":"https://video.twimg.com/f1.mp4"},{"content_type":"application/x-mpegURL","url":"https://video.twimg.com/f1.m3u8"}]}}}] 4d:["$","p",null,"end"]';
+const fs1 = XVG.parseFlightText(flight);
+ok(fs1.length === 1, "one video recovered from flight text, got " + fs1.length);
+ok(fs1[0].sources.length === 2 && fs1[0].sources[0].kind === "mp4", "variants parsed from salvage island");
+/* parseFlightText harvests any islands it finds; the sniffer only calls it
+ * AFTER JSON.parse fails, so valid JSON payloads never reach this path. */
+ok(XVG.parseFlightText(JSON.stringify(tweetDetail)).length === 2, "islands inside normal JSON also harvestable (fallback contract)");
+ok(XVG.parseFlightText("").length === 0, "empty text safe");
+const escapedFlight = 'chunk:["x",{\\"video_info\\":{\\"variants\\":[{\\"bitrate\\":640000,\\"content_type\\":\\"video/mp4\\",\\"url\\":\\"https://video.twimg.com/e1.mp4\\"}]}}]';
+const fs2 = XVG.parseFlightText(escapedFlight);
+ok(fs2.length === 1 && fs2[0].sources.length === 1, "escaped JSON-in-JSON island recovered");
+
 console.log("");
 console.log("RESULT: " + pass + " passed, " + fail + " failed");
 process.exit(fail ? 1 : 0);

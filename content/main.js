@@ -38,6 +38,7 @@
 
   function ingest(items) {
     let changed = false;
+    const changedRecs = [];
     for (const rec of items || []) {
       if (!rec || !rec.key || !Array.isArray(rec.sources) || !rec.sources.length) continue;
       const existing = store.get(rec.key);
@@ -53,6 +54,7 @@
       } else {
         store.set(rec.key, Object.assign({ at: Date.now() }, rec));
       }
+      changedRecs.push(store.get(rec.key));
       changed = true;
     }
     if (changed) {
@@ -60,7 +62,35 @@
       updateBadge();
       scheduleScan();
       queueAutoDownloads(); /* no-op unless a "Run" is in progress */
+      schedulePush(changedRecs); /* feed the background's global list */
     }
+  }
+
+  /* ---- global store bridge ------------------------------------------ */
+  /* Records also stream to the background's global store so the popup   */
+  /* shows ONE merged list across every tab and every link-fetch job.    */
+  const pushPending = new Set();
+  let pushTimer = null;
+
+  function schedulePush(records) {
+    for (const rec of records) pushPending.add(rec.key);
+    if (pushTimer) return;
+    pushTimer = setTimeout(flushPush, 1500);
+  }
+
+  function flushPush() {
+    pushTimer = null;
+    if (!pushPending.size) return;
+    const items = [];
+    for (const key of pushPending) {
+      const rec = store.get(key);
+      if (rec) items.push(rec);
+    }
+    pushPending.clear();
+    if (!items.length) return;
+    try {
+      api.runtime.sendMessage({ type: "xvg-media-push", items }).catch(() => {});
+    } catch (e) { /* extension reloading */ }
   }
 
   function updateBadge() {

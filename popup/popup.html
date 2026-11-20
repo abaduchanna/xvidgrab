@@ -25,6 +25,46 @@
     <div id="runLog" class="run-log" hidden></div>
   </div>
 
+  <section class="linkfetch">
+    <div class="sec-row">
+      <div class="sec-title">Fetch from links</div>
+      <button id="addLinksBtn" class="mini-btn">+ Add links</button>
+    </div>
+    <div id="queueEmpty" class="queue-empty">
+      Paste any x.com link &mdash; a profile, a post, or a search. XVidGrab opens the page,
+      scrolls it to the end and collects every video into the list below.
+    </div>
+    <ul id="queue" class="queue" hidden></ul>
+    <div class="queue-actions">
+      <span id="queueStatus" class="queue-status"></span>
+      <span class="queue-btns">
+        <button id="queueFetch" class="mini-btn primary" hidden>Fetch</button>
+        <button id="queueStop" class="mini-btn stop" hidden>Stop</button>
+        <button id="queueClear" class="mini-btn" hidden>Clear finished</button>
+      </span>
+    </div>
+  </section>
+
+  <div class="modal-overlay" id="addLinksModal" hidden>
+    <div class="modal">
+      <div class="modal-title">Add X pages to fetch</div>
+      <textarea id="linksInput" rows="7" spellcheck="false"
+        placeholder="One or more links, for example:
+https://x.com/username
+https://x.com/username/status/1742...
+https://x.com/search?q=cat%20videos"></textarea>
+      <label class="auto-dl-row">
+        <input type="checkbox" id="jobAutoDl" checked />
+        Download videos as they are found
+      </label>
+      <div id="linksError" class="links-error" hidden></div>
+      <div class="modal-btns">
+        <button id="linksCancel" class="btn secondary">Cancel</button>
+        <button id="linksAddFetch" class="btn primary">Add &amp; fetch</button>
+      </div>
+    </div>
+  </div>
+
   <section class="videos" id="videos"></section>
 
   <div class="actions" id="bulkRow" hidden>
@@ -56,6 +96,7 @@
     <span>MIT</span>
   </footer>
 
+  <script src="../content/sniff-parse.js"></script>
   <script src="popup.js"></script>
 </body>
 </html>

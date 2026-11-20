@@ -41,12 +41,25 @@ released under the MIT license.
   found and every download as it happens. The per-post Download button next
   to each video still works normally at the same time, so you can grab one
   manually whenever you like - Run doesn't take that over.
+- **Fetch from links (v1.4.0)** — paste any x.com link into the popup's
+  *Add links* dialog — a **profile** (`x.com/username`), a single **post**
+  (`x.com/user/status/123`), a **search**, or any other X page — press
+  *Add & fetch*, and XVidGrab quietly opens the page in a background tab,
+  scrolls it to the end, and adds every video it finds to the shared list.
+  Queue as many links as you like: they run one by one, and new links added
+  while a fetch is already running simply join the running queue. Profile
+  links are fetched twice (timeline + the `/media` tab) so every video on
+  the account is covered; single-post links resolve instantly through X's
+  public embed API without opening any tab. Found videos stream into one
+  merged popup list across all tabs and all jobs, with the usual
+  *Download all*.
 - **Best quality automatically** — progressive MP4 variants are ranked by
   bitrate and resolution (`720p`, `1080p`…) with standard
   shorter-side resolution tiers. `Smallest file` mode is available in the popup.
-- **Popup video list** — every video detected on the active tab, with
-  thumbnail, author, post text, per-video quality selector and a
-  **free "Download all"** button (a paid feature in App Pass).
+- **Popup video list** — one merged list of every video detected across all
+  x.com tabs and all link-fetch jobs, with thumbnail, author, post text,
+  per-video quality selector and a **free "Download all"** button (a paid
+  feature in App Pass).
 - **Live progress panel** — per-download progress bar on the page, driven by
   the browser's real download state (bytes received / total).
 - **Missed-response recovery** — the background page captures X GraphQL
@@ -181,7 +194,7 @@ cd xvidgrab
 npm install --global web-ext   # once
 web-ext lint --ignore-files tests
 web-ext build --ignore-files tests --artifacts-dir ../dist
-node tests/parser.test.js      # 29 parser assertions
+node tests/parser.test.js      # 44 parser + link-parsing assertions
 ```
 
 Requires Node.js 18+ for the test-suite. No bundler, no build step — the

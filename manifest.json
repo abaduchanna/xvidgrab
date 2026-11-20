@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "XVidGrab — X (Twitter) Video Downloader",
-  "version": "1.3.0",
+  "version": "1.4.0",
   "description": "One-click video & GIF downloader for X (Twitter). Free and open source, 100% local — no accounts, no limits, no tracking.",
   "author": "3SVerse",
   "homepage_url": "https://github.com/abaduchanna/xvidgrab",
