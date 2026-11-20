@@ -6,6 +6,16 @@
   <link rel="stylesheet" href="popup.css" />
 </head>
 <body>
+  <div class="splash" id="splash">
+    <img src="../icons/icon128.png" alt="" class="splash-logo" />
+    <div class="splash-name">XVidGrab</div>
+    <div class="splash-tag">X (Twitter) video downloader</div>
+    <div class="splash-track" role="progressbar" aria-label="Loading">
+      <div class="splash-fill indeterminate" id="splashFill"></div>
+    </div>
+    <div class="splash-status" id="splashStatus">Scanning tabs&hellip;</div>
+  </div>
+
   <header class="head">
     <img src="../icons/icon48.png" alt="" class="head-logo" />
     <div class="head-text">
@@ -34,6 +44,7 @@
       Paste any x.com link &mdash; a profile, a post, or a search. XVidGrab opens the page,
       scrolls it to the end and collects every video into the list below.
     </div>
+    <div class="livebar" id="livebar" hidden><div class="livebar-fill indeterminate" id="livebarFill"></div></div>
     <ul id="queue" class="queue" hidden></ul>
     <div class="queue-actions">
       <span id="queueStatus" class="queue-status"></span>

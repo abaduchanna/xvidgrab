@@ -123,6 +123,10 @@ var XVG = (function () {
   }
 
   function authorOf(tweetNode) {
+    /* syndication embed shape (cdn.syndication.twimg.com/tweet-result):
+     * the user object sits flat on the result node */
+    var flat = tweetNode.user;
+    if (flat && str(flat.screen_name)) return str(flat.screen_name);
     var core = tweetNode.core || tweetNode.Core;
     var ur = core && (core.user_results || core.userResults);
     var r = ur && ur.result;
@@ -134,6 +138,9 @@ var XVG = (function () {
   }
 
   function textOf(tweetNode) {
+    /* syndication embed shape: plain text field on the result node */
+    var flatText = str(tweetNode.text);
+    if (flatText) return flatText;
     var note = tweetNode.note_tweet || tweetNode.noteTweet;
     var nres = note && (note.note_tweet_results || note.noteTweetResults);
     var nt = nres && nres.result;
@@ -234,9 +241,14 @@ var XVG = (function () {
       var isTweet =
         tn === "Tweet" ||
         tn === "TweetWithVisibilityResults" ||
-        (!!o.rest_id && (!!o.legacy || !!o.core));
+        (!!o.rest_id && (!!o.legacy || !!o.core)) ||
+        /* syndication tweet-result shape: flat id_str + user + text/mediaDetails
+         * (media entities also carry id_str, so "user" is required to match) */
+        (!!o.id_str && !!o.user &&
+          (typeof o.text === "string" || Array.isArray(o.mediaDetails)));
       if (isTweet) {
-        var id = str(o.rest_id) || (o.legacy && str(o.legacy.id_str));
+        var id = str(o.rest_id) || (o.legacy && str(o.legacy.id_str)) ||
+          (o.user ? str(o.id_str) : null);
         if (id) {
           ctx = {
             id: id,
@@ -249,19 +261,23 @@ var XVG = (function () {
       var mediaArr = mediaArrayOf(o);
       if (mediaArr) collectFromMediaArray(mediaArr, ctx);
 
-      /* Standalone video_info nodes (media cards, newer unified shapes). */
+      /* Standalone video_info nodes (media cards, newer unified shapes,
+       * syndication mediaDetails). Key on the media id baked into the
+       * stream URL when the entity carries no id_str — the same id the
+       * flight-salvage path uses, so both paths merge into one row. */
       if (!mediaArr) {
         var sources = parseVariantsLoose(o);
         if (sources.length) {
           var mid = str(o.id_str) && String(o.id_str).length >= 8 ? str(o.id_str) : null;
+          var urlId = mid ? null : mediaIdFromStreamUrl(sources[0].url);
           push({
             tweetId: ctx.id,
             author: ctx.author,
             text: ctx.text,
             type: o.type === "animated_gif" ? "gif" : "video",
             thumbnail: thumbOf(o),
-            mediaIds: mid ? [mid] : [],
-            key: mid || sources[0].url,
+            mediaIds: mid || urlId ? [mid || urlId] : [],
+            key: mid || urlId || sources[0].url,
             sources: sources
           });
         }
@@ -404,71 +420,225 @@ var XVG = (function () {
    * Some X responses are react-server "flight" payloads (JSON islands
    * embedded inside string chunks) rather than pure JSON — JSON.parse
    * throws on them and the sniffer would miss every video on the page.
-   * When that happens, harvest "video_info":{...} islands brace-wise and
-   * re-parse them as standalone objects. Records built this way carry no
-   * tweet context (keyed by source URL), but the videos still land in the
-   * list — far better than a silent zero.
+   * Worse, the timeline data is often JSON-in-JSON (escaped once more),
+   * so only raw text harvesting works there.
+   *
+   * Harvesting strategy, best-first:
+   *   1. Complete MEDIA-ENTITY islands — keys whose value is an array of
+   *      media entities ("media_entities2" — page flight payload,
+   *      "mediaDetails" — syndication shape, "extended_entities" — legacy
+   *      GraphQL). These keep the poster thumbnail (media_url_https), the
+   *      media id and the tweet context (expanded_url) — no more gray rows.
+   *   2. Bare "video_info" islands (old behaviour), enriched with the
+   *      nearest preceding metadata (thumbnail / media id / expanded_url /
+   *      screen_name) from the same media entity — serialization order puts
+   *      those fields before video_info, so proximity is reliable here.
+   * Records recovered this way key on the media id baked into the stream
+   * URL, which is the SAME id the JSON path uses — so a salvaged record
+   * and a later full-JSON record for the same video MERGE instead of
+   * appearing twice in the popup.
    */
-  function harvestIslands(text) {
-    var out = [];
-    var KEY = "video_info";
-    var idx = 0;
-    while (out.length < 400) {
-      var k = text.indexOf(KEY, idx);
-      if (k === -1) break;
-      idx = k + KEY.length;
-      var open = text.indexOf("{", idx);
-      if (open === -1) break;
-      if (open - idx > 4) continue; /* key must be followed by its object */
-      var depth = 0, inStr = false, esc = false, end = -1;
-      for (var i = open; i < text.length; i++) {
-        var ch = text.charAt(i);
-        if (inStr) {
-          if (esc) esc = false;
-          else if (ch === "\\") esc = true;
-          else if (ch === "\"") inStr = false;
-          continue;
-        }
-        if (ch === "\"") { inStr = true; continue; }
-        if (ch === "{") depth++;
-        else if (ch === "}") {
-          depth--;
-          if (depth === 0) { end = i; break; }
-        }
+  function balancedSpan(text, open) {
+    var openCh = text.charAt(open);
+    var closeCh = openCh === "{" ? "}" : "]";
+    var depth = 0, inStr = false, esc = false;
+    for (var i = open; i < text.length; i++) {
+      var ch = text.charAt(i);
+      if (inStr) {
+        if (esc) esc = false;
+        else if (ch === "\\") esc = true;
+        else if (ch === "\"") inStr = false;
+        continue;
       }
-      if (end === -1) break;
-      try {
-        var parsed = JSON.parse(text.slice(open, end + 1));
-        if (parsed && Array.isArray(parsed.variants)) {
-          out.push(parsed);
-        }
-      } catch (e) { /* malformed island — skip */ }
-      idx = end + 1;
+      if (ch === "\"") { inStr = true; continue; }
+      if (ch === openCh) depth++;
+      else if (ch === closeCh) {
+        depth--;
+        if (depth === 0) return i;
+      }
     }
-    return out;
+    return -1;
+  }
+
+  /* first { or [ after a JSON key ("name":  <value>) */
+  function valueStartAfterKey(text, from) {
+    for (var i = from; i < text.length; i++) {
+      var ch = text.charAt(i);
+      if (ch === ":" || ch === " " || ch === "\t" || ch === "\n" || ch === "\r") continue;
+      return (ch === "{" || ch === "[") ? i : -1;
+    }
+    return -1;
+  }
+
+  /* media id baked into twimg stream URLs:
+   * video.twimg.com/{ext_tw_video|amplify_video|...}/<media id>/vid/... */
+  function mediaIdFromStreamUrl(url) {
+    var m = /(?:ext_tw_video|amplify_video|creator_studio_video|legacy_video|vms)\/(\d{10,25})\//.exec(url || "");
+    return m ? m[1] : null;
+  }
+
+  function lastMatch(re, s) {
+    var m = null, mm;
+    while ((mm = re.exec(s)) !== null) m = mm;
+    return m;
+  }
+
+  /* nearest metadata BEFORE a bare video_info island (same media entity —
+   * these fields serialize before video_info), never crossing lastEnd */
+  function metaBefore(text, from, to) {
+    var win = text.slice(from, Math.max(from, to));
+    var thumb = lastMatch(/"media_url_https"\s*:\s*"([^"]+)"/g, win);
+    var eu = lastMatch(/"expanded_url"\s*:\s*"([^"]+)"/g, win);
+    var sn = lastMatch(/"screen_name"\s*:\s*"([A-Za-z0-9_]{1,15})"/g, win);
+    var tweetId = null, author = null;
+    if (eu) {
+      var sm = /([A-Za-z0-9_]{1,15})\/status\/(\d{10,25})/.exec(eu[1]);
+      if (sm) { author = sm[1]; tweetId = sm[2]; }
+    }
+    return {
+      thumbnail: thumb ? thumb[1] : null,
+      tweetId: tweetId,
+      author: author || (sn ? sn[1] : null)
+    };
+  }
+
+  /* build a record from a complete media entity (thumbnail + id intact) */
+  function recordFromMediaEntity(m, ctx) {
+    ctx = ctx || { id: null, author: null, text: null };
+    var sources = parseVariantsLoose(m);
+    var type = m.type;
+    if (!sources.length) return null;
+    var mid = mediaIdOf(m);
+    /* tweet context from the entity's own expanded_url when present */
+    var link = str(m.expanded_url) || "";
+    var sm = link ? /(?:^|\/)(?:x\.com|twitter\.com)?\/?([A-Za-z0-9_]{1,15})\/status\/(\d{10,25})/.exec(link) : null;
+    return {
+      tweetId: (sm && sm[2]) || ctx.id,
+      author: (sm && sm[1]) || ctx.author,
+      text: ctx.text,
+      type: type === "animated_gif" ? "gif" : "video",
+      thumbnail: thumbOf(m),
+      mediaIds: mid ? [mid] : (mediaIdFromStreamUrl(sources[0].url) ? [mediaIdFromStreamUrl(sources[0].url)] : []),
+      key: mid || mediaIdFromStreamUrl(sources[0].url) || sources[0].url,
+      sources: sources
+    };
+  }
+
+  function harvestFlight(text) {
+    var records = [];
+    var covered = Object.create(null); /* stream URLs already in a full entity */
+    var spans = [];                    /* harvested [start,end) ranges     */
+    var pushed = 0;
+
+    function overlaps(start, end) {
+      for (var i = 0; i < spans.length; i++) {
+        if (start < spans[i][1] && end > spans[i][0]) return true;
+      }
+      return false;
+    }
+
+    function pushRecord(rec) {
+      if (!rec || !rec.sources.length) return;
+      for (var i = 0; i < records.length; i++) {
+        var r = records[i];
+        if (r.key !== rec.key) continue;
+        var seen = Object.create(null);
+        r.sources.forEach(function (s) { seen[s.url] = 1; });
+        rec.sources.forEach(function (s) {
+          if (!seen[s.url]) { r.sources.push(s); seen[s.url] = 1; }
+        });
+        r.sources = sortSources(r.sources);
+        r.tweetId = r.tweetId || rec.tweetId;
+        r.author = r.author || rec.author;
+        r.thumbnail = r.thumbnail || rec.thumbnail;
+        r.mediaIds = r.mediaIds.concat(rec.mediaIds.filter(function (id) {
+          return r.mediaIds.indexOf(id) === -1;
+        }));
+        return;
+      }
+      records.push(rec);
+    }
+
+    /* pass 1 — complete media-entity islands (thumbnail + ids intact) */
+    var KEYS = ["\"media_entities2\"", "\"mediaDetails\"", "\"extended_entities\""];
+    for (var k = 0; k < KEYS.length; k++) {
+      var idx = 0;
+      while (pushed < 500) {
+        var p = text.indexOf(KEYS[k], idx);
+        if (p === -1) break;
+        idx = p + KEYS[k].length;
+        var vs = valueStartAfterKey(text, idx);
+        if (vs === -1) continue;
+        var ve = balancedSpan(text, vs);
+        if (ve === -1) { idx = text.length; break; }
+        idx = ve + 1;
+        if (overlaps(vs, ve + 1)) continue;
+        var chunk;
+        try { chunk = JSON.parse(text.slice(vs, ve + 1)); } catch (e) { continue; }
+        var list = Array.isArray(chunk) ? chunk
+          : (chunk && Array.isArray(chunk.media) ? chunk.media : []);
+        var added = 0;
+        for (var j = 0; j < list.length; j++) {
+          var m = list[j];
+          if (!m || typeof m !== "object") continue;
+          var rec = recordFromMediaEntity(m, null);
+          if (!rec) continue;
+          pushRecord(rec);
+          pushed++;
+          added++;
+          for (var s = 0; s < rec.sources.length; s++) covered[rec.sources[s].url] = 1;
+        }
+        if (added) spans.push([vs, ve + 1]);
+      }
+    }
+
+    /* pass 2 — bare video_info islands, enriched with nearby metadata */
+    var KEY = "video_info";
+    var idx2 = 0;
+    var lastEnd = 0;
+    while (pushed < 600) {
+      var k2 = text.indexOf(KEY, idx2);
+      if (k2 === -1) break;
+      idx2 = k2 + KEY.length;
+      var open = text.indexOf("{", idx2);
+      if (open === -1) break;
+      if (open - idx2 > 4) continue; /* key must be followed by its object */
+      var end = balancedSpan(text, open);
+      if (end === -1) break;
+      idx2 = end + 1;
+      var island;
+      try { island = JSON.parse(text.slice(open, end + 1)); } catch (e) { continue; }
+      if (!island || !Array.isArray(island.variants)) continue;
+      var sources = parseVariants(island.variants);
+      if (!sources.length) continue;
+      for (var s2 = 0; s2 < sources.length; s2++) {
+        if (covered[sources[s2].url]) { sources = []; break; }
+      }
+      if (!sources.length) continue; /* a complete entity already covers this video */
+      var meta = metaBefore(text, lastEnd, k2);
+      lastEnd = end + 1;
+      var urlId = mediaIdFromStreamUrl(sources[0].url);
+      pushRecord({
+        tweetId: meta.tweetId,
+        author: meta.author,
+        text: null,
+        type: "video",
+        thumbnail: meta.thumbnail,
+        mediaIds: urlId ? [urlId] : [],
+        key: urlId || sources[0].url,
+        sources: sources
+      });
+      pushed++;
+    }
+    return records;
   }
 
   function parseFlightText(text) {
     if (!text || typeof text !== "string" || text.indexOf("video_info") === -1) return [];
-    var records = [];
-    var islands = harvestIslands(text);
-    if (!islands.length && text.indexOf("\\\"") !== -1) {
+    var records = harvestFlight(text);
+    if (!records.length && text.indexOf("\\\"") !== -1) {
       /* JSON-in-JSON escaped payload: unescape one level and retry */
-      islands = harvestIslands(text.replace(/\\\\\"/g, "\\\"").replace(/\\"/g, "\""));
-    }
-    for (var i = 0; i < islands.length; i++) {
-      var sources = parseVariants(islands[i].variants);
-      if (!sources.length) continue;
-      records.push({
-        tweetId: null,
-        author: null,
-        text: null,
-        type: "video",
-        thumbnail: null,
-        mediaIds: [],
-        key: sources[0].url,
-        sources: sources
-      });
+      records = harvestFlight(text.replace(/\\\\\"/g, "\\\"").replace(/\\"/g, "\""));
     }
     return records;
   }

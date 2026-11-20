@@ -7,6 +7,52 @@ const el = (id) => document.getElementById(id);
 const manifest = api.runtime.getManifest();
 el("version").textContent = "v" + manifest.version;
 
+/* ---------------- splash screen (live loading bar) ---------------- */
+/* Branded splash that covers the popup while the first data lands. The  */
+/* bar is LIVE: it sweeps while scanning, then switches to a determinate  */
+/* fill driven by real progress (videos found, pages fetched) and fades   */
+/* out when the popup is ready. A hard timeout guarantees it can never    */
+/* trap the UI, and any user click skips it immediately.                  */
+const splash = {
+  el: el("splash"),
+  fill: el("splashFill"),
+  status: el("splashStatus"),
+  openedAt: Date.now(),
+  done: false
+};
+
+function splashLive(text) {
+  if (splash.done) return;
+  splash.fill.classList.add("indeterminate");
+  splash.fill.style.width = "";
+  if (text) splash.status.textContent = text;
+}
+
+function splashProgress(pct, text) {
+  if (splash.done) return;
+  splash.fill.classList.remove("indeterminate");
+  splash.fill.style.width = Math.max(8, Math.min(100, pct)) + "%";
+  if (text) splash.status.textContent = text;
+}
+
+function splashFinish(text) {
+  if (splash.done) return;
+  splash.done = true;
+  splash.fill.classList.remove("indeterminate");
+  splash.fill.style.width = "100%";
+  if (text) splash.status.textContent = text;
+  /* keep the splash on screen at least ~650ms so it never strobes open */
+  const wait = Math.max(0, 650 - (Date.now() - splash.openedAt));
+  setTimeout(() => {
+    splash.el.classList.add("hide");
+    setTimeout(() => { if (splash.el.parentNode) splash.el.remove(); }, 340);
+  }, wait);
+}
+
+splashLive("Scanning tabs…");
+splash.el.addEventListener("click", () => splashFinish("Ready"));
+setTimeout(() => splashFinish("Ready"), 2600); /* hard exit — never trap */
+
 /* ---------------- settings ---------------- */
 const SETTINGS_DEFAULTS = { quality: "best", showButtons: true };
 
@@ -51,7 +97,16 @@ function thumbRow(v) {
   const img = document.createElement("img");
   img.className = "video-thumb";
   img.alt = "";
-  if (v.thumbnail) img.src = v.thumbnail;
+  img.loading = "lazy";
+  if (v.thumbnail) {
+    img.src = v.thumbnail;
+    img.addEventListener("error", () => {
+      img.classList.add("thumb-fallback");
+      img.removeAttribute("src");
+    }, { once: true });
+  } else {
+    img.classList.add("thumb-fallback");
+  }
 
   const body = document.createElement("div");
   body.className = "video-body";
@@ -125,6 +180,7 @@ function renderVideos(videos, error) {
     box.appendChild(empty);
     el("bulkRow").hidden = true;
     el("status").textContent = "Waiting for videos…";
+    if (!splash.done && error) splashLive("Could not reach the background…");
     return;
   }
 
@@ -133,6 +189,13 @@ function renderVideos(videos, error) {
 
   for (const v of currentVideos) box.appendChild(thumbRow(v));
   el("bulkRow").hidden = !currentVideos.some((v) => v.hasMp4);
+
+  if (!splash.done) {
+    splashProgress(Math.min(90, 34 + currentVideos.length * 4),
+      currentVideos.length + " video" + (currentVideos.length > 1 ? "s" : "") + " collected");
+    splashFinish(currentVideos.length + " video" +
+      (currentVideos.length > 1 ? "s" : "") + " ready");
+  }
 }
 
 /* ---------------- fetch all / run (auto-scroll to the end) ---------------- */
@@ -193,6 +256,12 @@ async function pollFetchAll() {
         " · scroll round " + res.round
       : "Collecting… " + res.count + " videos · scroll round " + res.round +
         " · height " + res.scrollHeight + "px";
+    if (!splash.done) {
+      splashProgress(Math.min(92, 20 + res.count * 4),
+        res.autoDownload
+          ? "Downloading… " + res.downloadedCount + " saved"
+          : "Collecting… " + res.count + " video" + (res.count === 1 ? "" : "s") + " found");
+    }
     if (res.count !== fetchLastRendered && res.count > 0) {
       fetchLastRendered = res.count;
       refreshVideos();
@@ -330,6 +399,10 @@ function renderQueue(res) {
 
   const running = jobs.filter((j) => j.status === "running").length;
   const queued = jobs.filter((j) => j.status === "queued").length;
+  const donePages = jobs.filter((j) => j.status === "done").length;
+  const failedPages = jobs.filter((j) => j.status === "failed").length;
+  const totalPages = donePages + failedPages + running + queued;
+  const liveFound = jobs.reduce((n, j) => n + (j.count || 0), 0);
   const foundTotal = jobs.reduce((n, j) => n + (j.status === "done" ? (j.count || 0) : 0), 0);
 
   let statusText = "";
@@ -337,6 +410,26 @@ function renderQueue(res) {
   else if (queued) statusText = queued + " link" + (queued === 1 ? "" : "s") + " waiting — press Fetch";
   else if (hasDone) statusText = "Done — " + foundTotal + " video" + (foundTotal === 1 ? "" : "s") + " collected in total";
   el("queueStatus").textContent = statusText;
+
+  /* slim live loading bar while pages are being fetched in the background */
+  const livebar = el("livebar");
+  const livebarFill = el("livebarFill");
+  livebar.hidden = !active;
+  if (active) {
+    if (donePages + failedPages > 0 && totalPages > 0) {
+      livebarFill.classList.remove("indeterminate");
+      livebarFill.style.width = Math.max(8, Math.round(((donePages + failedPages) / totalPages) * 100)) + "%";
+    } else {
+      livebarFill.classList.add("indeterminate");
+    }
+  }
+
+  /* splash mirrors live fetch progress while it is still up */
+  if (!splash.done && active && running) {
+    splashProgress(totalPages > 0 ? Math.max(12, Math.round(((donePages + failedPages) / totalPages) * 100)) : 12,
+      "Fetching " + (donePages + failedPages + 1) + "/" + totalPages + " pages · " +
+      liveFound + " video" + (liveFound === 1 ? "" : "s") + " found");
+  }
 
   el("queueStop").hidden = !active;
   el("queueFetch").hidden = active || !hasQueued;

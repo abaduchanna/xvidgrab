@@ -26,6 +26,21 @@ released under the MIT license.
 
 ## Features
 
+- **Splash screen with live loading bar (v1.4.1)** — the popup opens with a
+  branded splash whose loading bar is driven by real progress: it sweeps
+  while the first scan runs, switches to a determinate fill as videos land
+  or background pages are fetched, then fades out. A slim live bar under
+  *Fetch from links* keeps showing queue progress while pages are being
+  fetched in the background. A hard timeout guarantees the splash can never
+  trap the popup.
+- **Thumbnails everywhere (v1.4.1)** — posters now survive every discovery
+  path. The flight-stream salvage parser used to recover bare `video_info`
+  islands and drop the surrounding media entity — so rescued videos showed
+  a gray box. It now harvests complete media entities (`media_url_https`
+  poster, media id, `expanded_url` tweet context) and enriches bare islands
+  with the neighbouring fields. Syndication-resolved single posts also carry
+  their real `@author`, post text and tweet id now. Rows whose poster still
+  fails to load get a clean play-glyph placeholder instead of a gray box.
 - **One-click download** — a native-feeling download button is injected into
   the action row of every post containing a video or animated GIF.
 - **Search pages work** — video posts on x.com search results show download

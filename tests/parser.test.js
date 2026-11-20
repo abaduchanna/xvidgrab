@@ -289,6 +289,89 @@ const escapedFlight = 'chunk:["x",{\\"video_info\\":{\\"variants\\":[{\\"bitrate
 const fs2 = XVG.parseFlightText(escapedFlight);
 ok(fs2.length === 1 && fs2[0].sources.length === 1, "escaped JSON-in-JSON island recovered");
 
+console.log("[9] flight salvage keeps thumbnails + ids (media_entities2 island)");
+/* Real-world shape: x.com embeds timeline data as escaped JSON-in-JSON;
+ * each media entity carries the poster (media_url_https), the media id
+ * and an expanded_url with the tweet context. v1.4.0 dropped all of it
+ * (thumbnail: null) because only the bare video_info object was harvested. */
+const mediaEntity = {
+  additional_media_info: { monetizable: false },
+  expanded_url: "https://x.com/NASA/status/2123798314843787300/video/1",
+  ext_media_availability: { status: "Available" },
+  id_str: "2123798254152208384",
+  indices: [255, 278],
+  media_url_https: "https://pbs.twimg.com/media/HXk_T7cWcAAEUL9.jpg",
+  original_info: { height: 405, width: 720 },
+  type: "video",
+  video_info: {
+    duration_millis: 100714,
+    variants: [
+      { content_type: "application/x-mpegURL", url: "https://video.twimg.com/amplify_video/2123798254152208384/pl/master.m3u8?tag=16" },
+      { bitrate: 2176000, content_type: "video/mp4", url: "https://video.twimg.com/amplify_video/2123798254152208384/vid/1080x720/m1.mp4?tag=16" },
+      { bitrate: 632000, content_type: "video/mp4", url: "https://video.twimg.com/amplify_video/2123798254152208384/vid/640x360/m2.mp4?tag=16" }
+    ]
+  }
+};
+const pageFlight = '<script>requestAnimationFrame(function(){ver=1})</script>' +
+  'a1:["$","div",null,{"props":"x"}]2b:["$","$L5",null,{"timeline":' +
+  JSON.stringify({ media_entities2: [mediaEntity] }).replace(/"/g, '\\"') + '}]';
+const fs3 = XVG.parseFlightText(pageFlight);
+ok(fs3.length === 1, "media entity recovered from escaped page flight, got " + fs3.length);
+ok(fs3.length && !!fs3[0].thumbnail, "thumbnail kept (media_url_https)");
+ok(fs3.length && fs3[0].thumbnail === "https://pbs.twimg.com/media/HXk_T7cWcAAEUL9.jpg", "thumbnail URL exact");
+ok(fs3.length && fs3[0].author === "NASA", "author from expanded_url, got " + (fs3[0] && fs3[0].author));
+ok(fs3.length && fs3[0].tweetId === "2123798314843787300", "tweetId from expanded_url");
+ok(fs3.length && fs3[0].mediaIds.indexOf("2123798254152208384") !== -1, "media id kept");
+ok(fs3.length && fs3[0].key === "2123798254152208384", "keyed by media id so the JSON path merges into one row");
+
+/* unescaped variant of the same payload */
+const fs3b = XVG.parseFlightText(JSON.stringify({ media_entities2: [mediaEntity] }) + " and some junk that breaks JSON.parse on purpose");
+ok(fs3b.length === 1 && !!fs3b[0].thumbnail, "unescaped media_entities2 island harvested");
+
+/* bare video_info island: metadata recovered from the NEIGHBOURING entity fields */
+const bareFlight = '{"m":[' +
+  '{"id_str":"2123798254152208384","media_url_https":"https://pbs.twimg.com/media/Near.jpg","type":"video",' +
+  '"expanded_url":"https://x.com/nasa/status/2123798314843787300/video/1",' +
+  '"video_info":{"variants":[{"bitrate":640000,"content_type":"video/mp4","url":"https://video.twimg.com/ext_tw_video/2123798254152208384/pu/vid/b1.mp4"}]}}]}x';
+const fs4 = XVG.parseFlightText(bareFlight);
+ok(fs4.length === 1, "bare island recovered");
+ok(fs4.length && !!fs4[0].thumbnail && fs4[0].author === "nasa" && fs4[0].tweetId === "2123798314843787300",
+  "bare island enriched with nearby thumbnail + author + tweetId");
+
+/* same video from BOTH paths must merge on one key, not duplicate */
+const bothPaths = XVG.parseMedia({ media: mediaEntity });
+ok(bothPaths.length === 1 && bothPaths[0].key === "2123798254152208384", "JSON path uses the same media-id key");
+
+console.log("[10] syndication embed shape (cdn.syndication.twimg.com/tweet-result)");
+const synd = XVG.parseMedia({
+  tweetResult: {
+    result: {
+      __typename: "Tweet",
+      id_str: "2123435938848067841",
+      text: "Artemis II wakeup call",
+      user: { id_str: "19999991", screen_name: "NASA", name: "NASA" },
+      mediaDetails: [
+        {
+          type: "video",
+          media_url_https: "https://pbs.twimg.com/amplify_video_thumb/2123435905390100480/img/UAjjfTl4lSQubpUI.jpg",
+          video_info: {
+            variants: [
+              { bitrate: 1280000, content_type: "video/mp4", url: "https://video.twimg.com/amplify_video/2123435905390100480/vid/avc1/1280x720/s1.mp4?tag=16" },
+              { bitrate: 320000, content_type: "video/mp4", url: "https://video.twimg.com/amplify_video/2123435905390100480/vid/avc1/320x180/s2.mp4?tag=16" }
+            ]
+          }
+        }
+      ]
+    }
+  }
+});
+ok(synd.length === 1, "syndication tweet parsed, got " + synd.length);
+ok(synd.length && synd[0].tweetId === "2123435938848067841", "tweetId from flat id_str + user");
+ok(synd.length && synd[0].author === "NASA", "author from flat user.screen_name");
+ok(synd.length && synd[0].text === "Artemis II wakeup call", "text from flat text field");
+ok(synd.length && !!synd[0].thumbnail, "thumbnail from mediaDetails media_url_https");
+ok(synd.length && synd[0].key === "2123435905390100480", "key from stream-URL media id");
+
 console.log("");
 console.log("RESULT: " + pass + " passed, " + fail + " failed");
 process.exit(fail ? 1 : 0);
